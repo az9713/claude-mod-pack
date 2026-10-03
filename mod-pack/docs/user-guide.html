@@ -258,11 +258,11 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <h3>How to read the notes</h3>
 <table>
 <tr><th>Note</th><th>Meaning and what to do</th></tr>
-<tr><td>no terminal surface seen (saw: ...)</td><td>The engine listed its surfaces and the terminal was not among them. The names after <code>saw:</code> are the list. No model call was made. Send the full text of the note in your report.</td></tr>
-<tr><td>could not read the session surfaces</td><td>The engine refused to list its surfaces. No model call was made. Send a new prompt. When the note comes back each time, report it.</td></tr>
-<tr><td>clock unreadable</td><td>The engine gave no time, so the hourly count cannot be kept. No model call was made. When the note comes back each time, report it.</td></tr>
-<tr><td>a compaction is running</td><td>A compaction held the shared lock when the answer ended. No call was made and none was counted. Ask again after the compaction ends.</td></tr>
-<tr><td>a queued prompt is being sent</td><td>The Prompt Queue held the lock. The answer to the queued prompt is retold. No action is needed.</td></tr>
+<tr><td>no terminal surface seen (saw: ...)</td><td>The engine listed its surfaces and the terminal was not among them, so the mod made no model call. The names after <code>saw:</code> are the list. Send the full text of the note in your report.</td></tr>
+<tr><td>could not read the session surfaces</td><td>The engine refused to list its surfaces, so the mod made no model call. Send a new prompt. When the note comes back each time, report it.</td></tr>
+<tr><td>clock unreadable</td><td>The engine gave no time, so the hourly count cannot be kept and the mod made no model call. When the note comes back each time, report it.</td></tr>
+<tr><td>a compaction is running</td><td>A compaction held the shared lock when the answer ended, so the mod made and counted no call. Ask again after the compaction ends.</td></tr>
+<tr><td>a queued prompt is being sent</td><td>The Prompt Queue held the lock. The answer to the queued prompt is retold, so you do not need to act.</td></tr>
 <tr><td>an earlier retell call is still running</td><td>A call for an earlier answer had not ended (15 seconds at most). Ask again after a few seconds.</td></tr>
 <tr><td>another automatic action holds the lock</td><td>An unnamed holder held the lock. Report it, with what was running.</td></tr>
 <tr><td>model call failed (api-error, status N, kind)</td><td>The API answered with an error. <code>N</code> is the HTTP status, <code>none</code> when no response came. <code>kind</code> is the error kind, for example <code>rate_limit</code>, <code>overloaded</code> or <code>authentication_failed</code>. Wait and ask again for the first two. For <code>authentication_failed</code>, check the login of Claude Code. The call counted toward the hourly limit.</td></tr>
