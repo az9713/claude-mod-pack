@@ -17,19 +17,21 @@ import {
 } from './blast-radius'
 import type { GitOut, PathFact, Risk } from './blast-radius'
 import { cacheKeeper } from './cache-keeper'
-import type { Feature, FeatureContext, Step } from './feature'
+import type { Feature, FeatureContext, ModelAsk, ModelReply, Step } from './feature'
 import { runMods } from './mods-command'
-import { isFeatureOn, isSoundAllowed, isSoundOn, parseOverrides, rowBudget, STORE_KEY } from './settings'
+import { isFeatureOn, isSoundAllowed, isSoundOn, MAX_ROW_LINES, parseOverrides, rowBudget, STORE_KEY } from './settings'
 import { tokenWeather } from './token-weather'
+import { waitWhat } from './wait-what'
 import type { ModPackFeatureStates } from '../types'
 
 // The order is the row order in the band. Blast Radius draws no row.
-const FEATURES: readonly Feature[] = [tokenWeather, cacheKeeper, blastRadius]
+const FEATURES: readonly Feature[] = [tokenWeather, cacheKeeper, waitWhat, blastRadius]
 
 // Every feature's state, by feature id.
 const featureStates = atom({ plugin: 'mod-pack', key: 'features' } as const, {} as ModPackFeatureStates)
 
-type Active = { feature: Feature; ctx: FeatureContext }[]
+// `isBusy` is added by `dispatch`, at the moment of the call.
+type Active = { feature: Feature; ctx: Omit<FeatureContext, 'isBusy'> }[]
 
 // The features that are ON now, each with what it may do. Read at call time,
 // so a /mods change applies at once, with no reload.
@@ -43,31 +45,105 @@ async function active($: EngineInterface, options: PluginOptions): Promise<Activ
   }))
 }
 
-// Runs `call` on each feature that is ON, keeps the state it returns, shows the toast
-// it asks for, plays the sound it asks for when sound is allowed. One feature failing never stops the others.
-async function dispatch($: EngineInterface, options: PluginOptions, call: (feature: Feature, state: unknown, ctx: FeatureContext) => Step<unknown> | undefined) {
+// Runs `call` on each feature that is ON (or only on the one named by `only`), keeps the state
+// it returns, shows the toast it asks for, plays the sound it asks for when sound is allowed, and
+// starts the model call it asks for. One feature failing never stops the others.
+async function dispatch($: EngineInterface, options: PluginOptions, call: (feature: Feature, state: unknown, ctx: FeatureContext) => Step<unknown> | undefined, only?: string) {
   for (const { feature, ctx } of await active($, options)) {
+    if (only !== undefined && feature.id !== only) continue
+    let stop: AbortController | undefined
     try {
       const states: Record<string, unknown> = await read($, featureStates)
-      const step = call(feature, states[feature.id], ctx)
+      // `isBusy` is read here, in the same moment as the call, and the lock for a model call is
+      // taken in the same moment as its answer: nothing can take the lock in between.
+      const step = call(feature, states[feature.id], { ...ctx, isBusy: busyWith !== undefined })
+      if (step?.ask) stop = beginAsk()
       if (step?.state !== undefined) {
         const state = step.state
         await update($, featureStates, all => ({ ...all, [feature.id]: state }))
       }
       if (step?.toast) $.ui.toast(step.toast)
       if (step?.sound && ctx.isSoundAllowed) void $.audio.play({ asset: step.sound }).catch(() => undefined)
+      if (step?.ask && stop) {
+        // Detached: the event that raised this call never waits for the model.
+        void runAsk($, options, feature, step.ask, stop)
+        stop = undefined
+      }
     } catch (error) {
+      if (stop) releaseAsk(stop)
       $.ui.log(`mod-pack: ${feature.id} failed: ${String(error)}`)
     }
   }
 }
 
 // ---- The shared automation lock ----------------------------------------------------
-// Only ONE automatic action runs at a time: a compaction, and (later mods) an automatic
-// prompt submission. `busyWith` names the holder, or is undefined when free. It is plain
-// module state on purpose: a hot reload drops it together with the running work and the
-// timers, so it cannot stay set. A mod that sends prompts by itself must check it first.
-let busyWith: 'compaction' | undefined
+// Only ONE automatic action runs at a time: a compaction, a model call of a mod (Wait What),
+// and (a later mod) an automatic prompt submission. `busyWith` names the holder, or is
+// undefined when free. It is plain module state on purpose: a hot reload drops it together
+// with the running work and the timers, so it cannot stay set. A mod that sends prompts or
+// calls a model by itself must check it first (`ctx.isBusy`).
+//
+// A compaction always takes the lock, even from a model call: the engine's own compaction
+// cannot be refused, and the model call is a short side request with no history, so the two
+// do not disturb each other. The model call then no longer holds the lock, and must not free it.
+let busyWith: 'compaction' | 'model-call' | undefined
+
+// ---- Model calls (Wait What) ---------------------------------------------------------
+// At most ONE model call of a mod is in flight. `askStop` is its AbortController, and also the
+// proof of who owns the lock: only the owner frees it. A call is cancelled when a turn starts
+// or the session ends, and its reply is then dropped.
+let askStop: AbortController | undefined
+
+// Takes the lock for a model call. Undefined when the lock is held by someone else.
+function beginAsk(): AbortController | undefined {
+  if (busyWith !== undefined) return undefined
+  cancelAsk()
+  busyWith = 'model-call'
+  askStop = new AbortController()
+  return askStop
+}
+
+// The call ended: free the lock if this call still owns it.
+function releaseAsk(stop: AbortController) {
+  if (askStop !== stop) return
+  askStop = undefined
+  if (busyWith === 'model-call') busyWith = undefined
+}
+
+// Cancels the call in flight, if any, and frees its lock at once.
+function cancelAsk() {
+  const stop = askStop
+  if (!stop) return
+  stop.abort()
+  releaseAsk(stop)
+}
+
+// One model call for a feature, then the reply to the feature (`modelDone`). It is called with
+// `void`, so it never throws: every failure ends as "no reply". The call is `$.model.complete`:
+// no history, so the conversation and its cache are not touched. It always resolves a result,
+// and rejects only for a request the engine refuses to send (a blocked model).
+async function runAsk($: EngineInterface, options: PluginOptions, feature: Feature, ask: ModelAsk, stop: AbortController) {
+  try {
+    let reply: ModelReply = { isAnswered: false }
+    try {
+      const result = await $.model.complete(
+        { model: ask.model, system: ask.system, prompt: ask.prompt, maxTokens: ask.maxTokens, timeoutMs: ask.timeoutMs, ...(ask.effort ? { effort: ask.effort } : {}) },
+        { signal: stop.signal },
+      )
+      if (result.isAnswered) reply = { isAnswered: true, text: result.text }
+    } catch (error) {
+      $.ui.log(`mod-pack: ${feature.id} model call failed: ${String(error).slice(0, 200)}`)
+    } finally {
+      releaseAsk(stop)
+    }
+    // Cancelled (a turn started or the session ended): the reply is of no use.
+    if (stop.signal.aborted) return
+    await dispatch($, options, (f, state, ctx) => f.modelDone?.(state, { turnId: ask.turnId, reply }, ctx), feature.id)
+    $.ui.invalidate('ui.render')
+  } catch (error) {
+    $.ui.log(`mod-pack: ${feature.id} model reply failed: ${String(error)}`)
+  }
+}
 
 // ---- The minute timer ---------------------------------------------------------------
 // Features with a `tick` (Cache Keeper) get one call a minute. The timer is started
@@ -106,12 +182,14 @@ async function afterCompaction($: EngineInterface, options: PluginOptions) {
 }
 
 // What the band's "compact" button does. It ignores the press while any compaction is
-// running (the lock). `$.session.compact()` rejects while a turn runs and resolves
-// `{ skip }` when a hook vetoes: both become a toast, and the row stays as it was.
+// running (the lock), and says so by a toast while a model call holds the lock (a few seconds
+// at most: a call is cut after 15 seconds). `$.session.compact()` rejects while a turn runs and
+// resolves `{ skip }` when a hook vetoes: both become a toast, and the row stays as it was.
 // It runs through every hook but the calling one, so this plugin's own
 // `session.compact` hook does not see this call: the lock and the clear are done here.
 async function compactNow($: EngineInterface, options: PluginOptions) {
-  if (busyWith !== undefined) return
+  if (busyWith === 'compaction') return
+  if (busyWith !== undefined) return $.ui.toast('Cache Keeper: a Wait What retell is running. Press compact again in a few seconds.')
   busyWith = 'compaction'
   $.ui.invalidate('ui.render')
   try {
@@ -278,6 +356,7 @@ export const register: Register = (on, options) => {
 
   on('session.end', async ($, e, next) => {
     stopTicker()
+    cancelAsk()
     await dispatch($, options, (feature, state, ctx) => feature.sessionEnd?.(state, { e }, ctx)).catch(() => undefined)
     return next(e)
   })
@@ -288,7 +367,9 @@ export const register: Register = (on, options) => {
   // not the main conversation's, so neither counts.
   on('session.compact', async ($, e, next) => {
     if (e.trigger === 'precompute' || e.agentId !== undefined) return next(e)
-    const isOwner = busyWith === undefined
+    // Another compaction already holds the lock: this one is not its owner. A model call does not
+    // keep a compaction out: the compaction takes the lock, and the model call must not free it.
+    const isOwner = busyWith !== 'compaction'
     if (isOwner) busyWith = 'compaction'
     $.ui.invalidate('ui.render')
     try {
@@ -302,6 +383,7 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.start', async ($, e, next) => {
+    cancelAsk()
     await dispatch($, options, (feature, state, ctx) => feature.turnStart?.(state, { e }, ctx))
     await armTicker($, options)
     return next(e)
@@ -309,7 +391,9 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const context = await $.session.usage().then(usage => usage.context, () => undefined)
-    await dispatch($, options, (feature, state, ctx) => feature.turnComplete?.(state, { e, context }, ctx))
+    // A mod that spends tokens on a row only the terminal draws asks for this. Unknown counts as no terminal.
+    const hasTerminal = await $.session.surfaces().then(surfaces => surfaces.includes('terminal'), () => false)
+    await dispatch($, options, (feature, state, ctx) => feature.turnComplete?.(state, { e, context, hasTerminal }, ctx))
     await armTicker($, options)
     return next(e)
   })
@@ -346,13 +430,21 @@ export const register: Register = (on, options) => {
     const input = { props: e.props, now, options, isCompacting: busyWith === 'compaction' }
     const actions = { compact: () => void compactNow($, options) }
     const states: Record<string, unknown> = await read($, featureStates)
-    const rows: { id: string; row: RenderElement }[] = []
+    const rows: { id: string; row: RenderElement; lines: number }[] = []
+    let used = 0
 
     for (const { feature } of await active($, options)) {
-      if (rows.length >= budget) break
+      if (used >= budget) break
       try {
         const row = feature.band?.(states[feature.id], input, el, actions)
-        if (row) rows.push({ id: feature.id, row })
+        if (!row) continue
+        // A row is 1 line unless the feature says it draws more now (`bandLines`: Wait What, 2).
+        // It never takes more than the rows left: then the first lines show and the rest is clipped.
+        const asked = feature.bandLines?.(states[feature.id], input) ?? 1
+        const wanted = Number.isFinite(asked) ? Math.floor(asked) : 1
+        const lines = Math.max(1, Math.min(MAX_ROW_LINES, wanted, budget - used))
+        rows.push({ id: feature.id, row, lines })
+        used += lines
       } catch (error) {
         $.ui.log(`mod-pack: ${feature.id} band failed: ${String(error)}`)
       }
@@ -363,8 +455,8 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {below}
-        {rows.map(({ id, row }) => (
-          <Box key={`row-${id}`} height={1} overflow="hidden">{row}</Box>
+        {rows.map(({ id, row, lines }) => (
+          <Box key={`row-${id}`} height={lines} overflow="hidden">{row}</Box>
         ))}
       </Box>
     )

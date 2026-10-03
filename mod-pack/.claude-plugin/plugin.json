@@ -28,6 +28,20 @@
       "required": false,
       "default": 60
     },
+    "waitWhat": {
+      "type": "boolean",
+      "title": "Wait What",
+      "description": "After a long answer (200 characters or more), show a retell in plain words, at most 2 short lines, above the prompt. SPENDS MODEL TOKENS: each retold answer sends up to 4000 characters of the answer's text to the cheapest model (the haiku alias) on your own plan and reads about one short reply back. Off by default. The retell is not in the transcript and not in the model's context.",
+      "required": false,
+      "default": false
+    },
+    "maxModelCallsPerHour": {
+      "type": "number",
+      "title": "Wait What: model calls per hour",
+      "description": "The most model calls Wait What makes in a rolling hour, counted per session. Each retold answer is one call. Default 30. 0 means no call. A value that is not a number from 0 to 1000 counts as 30.",
+      "required": false,
+      "default": 30
+    },
     "blastRadius": {
       "type": "boolean",
       "title": "Blast Radius",

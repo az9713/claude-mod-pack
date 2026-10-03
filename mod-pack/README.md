@@ -1,8 +1,8 @@
 # mod-pack
 
-A pack of small Claude Code mods in one plugin. Token Weather and Cache Keeper draw in the band above the prompt. The mods that draw share that band without overwriting each other, or other plugins. Blast Radius draws nothing: it asks a question. `/mods` turns each one on or off.
+A pack of small Claude Code mods in one plugin. Token Weather, Cache Keeper and Wait What draw in the band above the prompt. The mods that draw share that band without overwriting each other, or other plugins. Blast Radius draws nothing: it asks a question. `/mods` turns each one on or off. Wait What is the one mod that spends model tokens, and it is off by default.
 
-Status: version 0.1.0. Three mods exist. The tests and `claude plugin validate` pass. No person has yet watched mod-pack draw in a real terminal, seen the Blast Radius dialog, or pressed the Cache Keeper button. See "What is verified".
+Status: version 0.1.0. Four mods exist. The tests and `claude plugin validate` pass. No person has yet watched mod-pack draw in a real terminal, seen the Blast Radius dialog, pressed the Cache Keeper button, or read a Wait What retell. See "What is verified".
 
 Requires Claude Code 2.1.287 or later. Mods are plugins of "function hooks", an early-access API that can change between releases.
 
@@ -13,7 +13,7 @@ Requires Claude Code 2.1.287 or later. Mods are plugins of "function hooks", an 
 | Token Weather (`token-weather`) | available | One row above the prompt: a weather word for how full the context window is, the percent, tokens against the window, a 12-turn chart, and the change since the last turn. Plays thunder when the window fills into Storm or Compact soon (sound is off by default). |
 | Blast Radius (`blast-radius`) | available | Before Claude runs a risky shell command (`rm -rf`, `git reset --hard`, `git push --force`, ...), it holds the command and asks Proceed or Cancel in the question dialog, with a read-only preview of what would change. No band row. No model tokens. See "Blast Radius". |
 | Cache Keeper (`cache-keeper`) | available | One row above the prompt: a countdown of how long the prompt cache stays warm after the last response, the context size, and a `compact` button. A toast in the last 5 minutes. No model tokens. See "Cache Keeper" and "Compatibility". |
-| Wait What | planned, not built | |
+| Wait What (`wait-what`) | available, OFF by default | After a long answer, a retell in plain words (at most 2 short lines) in the band above the prompt. **Spends model tokens**: each retold answer is one call to the cheapest model, on your own plan. At most 30 calls an hour. See "Wait What" and "Compatibility". |
 | Prompt Queue | planned, not built | |
 | Snake | planned, not built | |
 
@@ -72,6 +72,64 @@ Limits of the countdown:
 - No sound. Plugin sound plays only on macOS, and the one sound in the pack (thunder) means a full context window.
 
 Switch it off: `/mods off cache-keeper` (at once), or set `cacheKeeper` to `false`.
+
+## Wait What
+
+**Wait What spends model tokens, and it is OFF by default.** After a long answer it sends the answer's text to a model and shows the reply, a retell in plain words, in the band above the prompt. The retell is not in the transcript and not in the model's context.
+
+What it costs and what it sends:
+
+- Each retold answer is one call to the model alias `haiku` (the cheapest: no dated model id is written in the code), made through your own Claude Code session on your own plan.
+- What goes out: a fixed instruction of about 50 words, and the answer's text. Longer than 4,000 characters, the answer is cut to its start and its end (about 40% and 60%) with a marker between them. At four characters to a token, 4,000 characters are about 1,000 tokens. This is an estimate: no call was measured.
+- What comes back: a reply capped at 120 tokens (`maxTokens`). That is about one short reply for each answer. The call is cut after 15 seconds and then shows nothing.
+- No history is sent, so the call does not touch your conversation or its prompt cache.
+- The text of your answers leaves your machine for the model provider, as your own prompts do. Another plugin that hooks the `model.complete` call can read the request. Do not turn it on for work whose text must not go to the model a second time.
+- The cap is `maxModelCallsPerHour` (default 30), counted in a rolling hour, per session. See "The hourly cap".
+
+Turn it on: `/mods on wait-what` (at once, kept across sessions), or set `waitWhat` to `true` (see "Settings"). Turn it off: `/mods off wait-what`.
+
+When an answer is retold. All of these must hold:
+
+| Rule | Detail |
+| --- | --- |
+| The mod is on | `/mods`, then the setting, then the default (off). |
+| The main conversation | A subagent's turn is never retold, and it does not clear the retell of the main answer. |
+| A real answer | The turn ended with the reason `answer`. An interrupt, an error and a refusal are not retold. |
+| Long enough | 200 characters or more, after trimming. A shorter answer is not retold: it is already short. The number is `MIN_ANSWER_CHARS` in `hooks/retell.ts`. |
+| A terminal is in use | `$.session.surfaces()` includes `terminal`. If it does not, or it cannot be read, there is no call. The row is drawn only on the terminal, so a call without a terminal would spend tokens for nothing. |
+| The budget allows it | See "The hourly cap". |
+| No compaction runs, no other model call runs | The shared lock is free. See "Compatibility". |
+| The clock can be read | A clock that cannot be read cannot count the hour, so there is no call. |
+
+What the row says (text only: nobody has seen it drawn):
+
+```
+wait what: The build failed because a test reads a setting that was renamed.
+           Rename the setting in the test file, then run the build again.
+```
+
+- The reply is the model's, cleaned: terminal escape sequences, control characters and invisible characters are removed, list, heading and bold marks are removed, and spaces are folded. At most 2 lines are kept. A line longer than the band is cut with `…`. One long line is split at a space into two. Characters are counted, not terminal cells, so a wide character can make a line longer than its count: the band's own clip then cuts it.
+- A one-line retell takes one row of the band, a two-line retell takes two (see "How mods share the band").
+- While the call runs, nothing is drawn. The row is drawn while no turn runs, and it goes at the next prompt (`turn.start`), at `/clear`, and when a newer answer ends.
+- A reply that comes after any of those is dropped. A call in flight is cancelled at the next prompt and at the end of the session. `/mods off wait-what` during a call lets that call end (15 seconds at most) and drops its reply.
+- A failed call (an API error, an empty reply, a timeout, or a model that is blocked) shows nothing, shows no toast, and writes one line to the UI log. It still counts toward the hourly cap, so a failing model cannot be called without limit.
+- No sound. No hotkey: the row has no Button.
+- A retell is a model's summary of the answer and can be wrong. Read the answer itself for anything that matters.
+
+### The hourly cap
+
+- The cap is the setting `maxModelCallsPerHour`, default 30. A call counts from the moment it starts, success or failure. The window is a rolling hour: a call stops counting exactly one hour after it started.
+- `0` is valid and means no call at all. A value that is not a number from 0 to 1000 (negative, text, or above 1000) counts as 30.
+- When the cap refuses a call, nothing is sent and the band shows one muted line, `wait-what: hourly limit reached`, until the next prompt. The next answer is retold as soon as the oldest call has left the hour.
+- The count is kept in session state. It is meant to survive a hot reload and `/clear` (shown in the tests only, not in a real session). A new session starts at zero, so the cap is per session, not per account. If you run many sessions at once, each has its own cap.
+- If the clock is set back, a call that is then in the future counts as made now, and leaves one hour after the next finished turn.
+- An answer that is skipped (too short, a subagent, interrupted) spends nothing.
+
+Limits:
+
+- The kit cannot show the real model. Every reply in the tests is a stub. Whether `haiku` is allowed in your setup, what it answers, what one retell costs on your plan, and how long it takes were not measured. If the model is blocked, each answer logs one line and shows nothing.
+- It was not checked that the call stays out of the transcript on a real session. The type declarations say `$.model.complete` runs "with no history" and the plugin calls no append, no prompt and no tool: so the transcript and the model context are only read from, per those declarations.
+- Whether the retell is readable at your terminal width was not seen.
 
 ## Blast Radius
 
@@ -171,13 +229,15 @@ An unknown id gives an error that lists the known ids. A change applies at once,
 
 ## Settings: on and off
 
-Each mod has one on/off setting, Cache Keeper has one more (`cacheTtlMinutes`), and there is one global `sound` setting. They are the plugin's `userConfig` options in `.claude-plugin/plugin.json`.
+Each mod has one on/off setting, Cache Keeper has one more (`cacheTtlMinutes`), Wait What has one more (`maxModelCallsPerHour`), and there is one global `sound` setting. They are the plugin's `userConfig` options in `.claude-plugin/plugin.json`.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `tokenWeather` | `true` | Show Token Weather. |
 | `cacheKeeper` | `true` | Show the Cache Keeper countdown row. |
 | `cacheTtlMinutes` | `60` | The prompt cache lifetime, in minutes, for Cache Keeper. 60 is the documented lifetime on a subscription. Set 5 on an API key, a cloud provider, or usage credits. A value that is not above 0 and up to 1440 counts as 60. |
+| `waitWhat` | `false` | Retell each long answer in plain words in the band. **Spends model tokens** (one short call per answer, to the cheapest model). Off by default. |
+| `maxModelCallsPerHour` | `30` | The most model calls Wait What makes in a rolling hour, per session. `0` means none. A value that is not a number from 0 to 1000 counts as 30. |
 | `blastRadius` | `true` | Ask Proceed or Cancel before a risky shell command. |
 | `sound` | `false` | Let mods that can play a sound play it. |
 
@@ -199,8 +259,8 @@ All mods in the pack draw through one compositor. It is the only `ui.render` hoo
 
 1. **Always call `next`.** The compositor does `const below = await next(e)` and returns a column with `{below}` on top. A hook that does not call `next` hides every other plugin's band. This was the cause of the Token Weather and next-steps clash.
 2. **The pack goes below the others.** The pack adds its rows under `{below}`. It never reorders or removes what is below.
-3. **Rows, not trees.** A mod returns one row. The compositor clips it to one terminal row (`height={1}`, `overflow="hidden"`) and counts it as one row.
-4. **A row budget.** `maxRows` is what the whole band may take, for all plugins together. The pack cannot measure what other plugins drew. So it takes at most one third of `maxRows`, never more than 4 rows, and none when `maxRows` is under 3. Mods fill the budget in the order of the `FEATURES` list. The first mod has the priority.
+3. **Rows, not trees.** A mod returns one row. The compositor clips it to one terminal row (`height={1}`, `overflow="hidden"`) and counts it as one row. A mod may draw 2 lines: its `bandLines` function says how many (1 or 2) for the state it has now. The compositor then gives the row `height={2}` and counts it as 2 rows. It never gives a row more lines than are left in the budget: the first lines show and the rest are clipped. Only Wait What uses `bandLines`. Inside a 2-line row, each line is its own clipped one-row Box, so a long first line cannot push the second out of view.
+4. **A row budget.** `maxRows` is what the whole band may take, for all plugins together. The pack cannot measure what other plugins drew. So it takes at most one third of `maxRows`, never more than 4 rows, and none when `maxRows` is under 3. Mods fill the budget in the order of the `FEATURES` list. The first mod has the priority. The budget is counted in rows of the terminal, not in mods: with Token Weather, Cache Keeper and Wait What all drawing, `maxRows` 3 to 5 gives the budget 1 (Token Weather only), 6 to 8 gives 2 (Token Weather and Cache Keeper), 9 to 11 gives 3 (Wait What shows its first line only), and 12 or more gives 4 (Wait What shows both lines).
 5. **Terminal only.** On a surface that is not `terminal`, or while a survey holds the band (`hasSurvey`), the compositor returns `below` unchanged.
 6. **No digit hotkeys.** Never put `hotkey="1"` (or any digit) on a Button in a mod. A digit hotkey also fires when the person types that digit into an empty prompt. next-steps already owns 0, 1, 2 and 3. Use a letter hotkey, or a click, or no hotkey.
 
@@ -210,24 +270,40 @@ The next mods add to these same hooks. They do not register the event again.
 
 ## Compatibility
 
-What each mod uses, so that you can see which ones can run together. All mods listed can run together.
+What each mod uses, so that you can see which ones can run together. All mods listed can run together. The row to read first is Wait What: it is the only one that spends model tokens.
 
 | Mod | Display slot | Hotkeys | Shared lock | Spend |
 | --- | --- | --- | --- | --- |
 | Token Weather | Band row 1 (first in `FEATURES`: the first to get a row when the budget is short) | none | not used | none |
 | Cache Keeper | Band row 2 (the row budget is 1 when `maxRows` is 3 to 5, so then only Token Weather shows) | none. One Button, `compact`, by click or by focusing the band. No digit hotkey, so it never takes the digits that next-steps owns | takes it while it compacts, and ignores a press while it is held | none. No model call, no network call |
+| Wait What | Band rows 3 and 4: last in `FEATURES`, so the last to get rows. It draws 1 or 2 lines, whichever the retell needs. With Token Weather and Cache Keeper both drawing, it gets 2 lines when `maxRows` is 12 or more, 1 line when `maxRows` is 9 to 11, and none under 9. With either of them off, or not drawing yet, it moves up | none. The row has no Button | reads it: no call while it is held. Takes it for the length of its call (15 seconds at most), and frees it when the call ends or is cancelled | **spends model tokens**: one call to the `haiku` alias per retold answer, at most `maxModelCallsPerHour` (default 30) in a rolling hour, per session. Off by default |
 | Blast Radius | no row. The question dialog, on `tool.call` for Bash and PowerShell | none | not used | none. No model call |
 
-The shared automation lock. Only one automatic action runs at a time: a compaction, and, in the mods that come next, an automatic model call or an automatic prompt submission. The lock is the variable `busyWith` in `hooks/register.tsx`. A compaction holds it from its start to its end. That covers the Cache Keeper button, the person's `/compact`, and the engine's auto-compaction (all seen by the `session.compact` hook). A mod that sends a prompt by itself must read the lock first and wait while it is held. The lock is plain module state: a hot reload resets it, together with the work it guards, so it cannot stay set. A compaction triggered with `precompute`, and a subagent's own compaction, do not take it.
+The shared automation lock. Only one automatic action runs at a time: a compaction, a model call of a mod (Wait What), and, in the mod that comes next, an automatic prompt submission. The lock is the variable `busyWith` in `hooks/register.tsx`. Its value says who holds it: `'compaction'`, `'model-call'`, or nothing. A mod reads it as `ctx.isBusy` and must not start its own automatic action while it is true. The rules:
 
-Events that mod-pack hooks without a matcher, once each: `session.start`, `session.end`, `session.compact`, `turn.start`, `turn.complete` and `ui.render` for `AbovePrompt`. Another plugin that hooks the same event with no matcher is not affected: each plugin may do it once. The next-steps plugin (the stub in the tests) draws in the same band. mod-pack always calls `next` and keeps what is below, so both show.
+- A compaction holds it from its start to its end. That covers the Cache Keeper button, the person's `/compact`, and the engine's auto-compaction (all seen by the `session.compact` hook). A compaction triggered with `precompute`, and a subagent's own compaction, do not take it.
+- Wait What takes it only when it is free, in the same moment as it decides to call, and holds it until its call ends. It frees it when the call ends, fails, times out (15 seconds), or is cancelled by the next prompt (`turn.start`) or the end of the session. Only the call that took the lock may free it.
+- A compaction always takes the lock, even from a model call. The engine's own compaction cannot be refused, and a Wait What call is a short side request with no history, so it does not disturb a compaction. The call then no longer holds the lock, and when it ends it does not free the compaction's lock.
+- The Cache Keeper `compact` button does nothing while a compaction runs (as before). While a Wait What call runs, it shows a toast, `a Wait What retell is running. Press compact again in a few seconds.`, and does not compact. The wait is 15 seconds at most, usually about a model reply.
+- An answer that ends while the lock is held is not retold, not even later, and spends nothing from the hourly cap. When a second answer ends while the call for the first is still running (with no prompt between them), the second is not retold, and the reply of the first is dropped as stale. The row then shows nothing, until the next answer that ends with the lock free.
+- The next mod (Prompt Queue) must not submit a prompt while a compaction runs. A Wait What call does not need to hold it back: the next prompt cancels the call, and its reply is dropped. `ctx.isBusy` is true for both holders; the queue must read `busyWith === 'compaction'` if it wants to ignore a model call.
+- The lock is plain module state: a hot reload resets it, together with the work it guards, so it cannot stay set.
+
+Events that mod-pack hooks without a matcher, once each: `session.start`, `session.end`, `session.compact`, `turn.start`, `turn.complete` and `ui.render` for `AbovePrompt`. Another plugin that hooks the same event with no matcher is not affected: each plugin may do it once. The next-steps plugin (the stub in the tests) draws in the same band. mod-pack always calls `next` and keeps what is below, so both show. Wait What adds no hook: it works in `turn.start`, `turn.complete` and `session.end`, which already exist, and its new engine calls are `$.model.complete` and `$.session.surfaces`.
+
+Wait What and the other plugins:
+
+- Beside next-steps: next-steps asks its own question with `$.model.fork` after an answer of 80 characters or more, and Wait What asks with `$.model.complete` after one of 200 characters or more. Both can fire on the same answer: two separate calls, each spending tokens, on different models and with different input. next-steps' fork reads the whole conversation (it shares the prompt cache); Wait What sends only the answer. Neither reads the other's result. This was not run against the real next-steps plugin.
+- Beside Token Weather and Cache Keeper: all three rows show, in that order, in the tests. Wait What never overwrites a row: when the budget is short it is the one that waits. Its call does not touch the main conversation's prompt cache, so it does not restart Cache Keeper's clock.
+- Beside Blast Radius: no overlap. A Blast Radius dialog is a question on a tool call. Wait What's call is a side request. The Wait What call does not wait for a dialog, and a dialog does not wait for it. What a retell does while a dialog is open was not checked.
+- Beside the Prompt Queue (not built yet): see the lock rules above.
 
 No pair of mods in the pack is known to conflict. Mods that are planned and not built are not listed.
 
 ## Cost, sound and safety
 
-- A mod is code. It runs with your permissions. Read a mod before you enable it. Token Weather reads the context-window size and your token count, keeps them in session state, and draws. It makes no network call and spends no model tokens. Cache Keeper reads the clock and your token count, keeps them in session state, and draws. Its `compact` button runs the same compaction as `/compact`, and that compaction does spend model tokens, when you press it. It makes no network call of its own. Blast Radius runs read-only `git` commands and reads folder listings to build its preview. It makes no network call and spends no model tokens.
-- Spend rule for mods that call a model (none yet). A mod must set `usesModel: true`, so `/mods` shows it. It must use the cheapest model by default (for example the `haiku` alias). It must make at most 30 model calls an hour. There is no helper for this yet. The first mod that calls a model adds one.
+- A mod is code. It runs with your permissions. Read a mod before you enable it. Token Weather reads the context-window size and your token count, keeps them in session state, and draws. It makes no network call and spends no model tokens. Cache Keeper reads the clock and your token count, keeps them in session state, and draws. Its `compact` button runs the same compaction as `/compact`, and that compaction does spend model tokens, when you press it. It makes no network call of its own. Blast Radius runs read-only `git` commands and reads folder listings to build its preview. It makes no network call and spends no model tokens. Wait What, when you turn it on, sends the text of your answers to the cheapest model and spends tokens on your plan: see "Wait What".
+- Spend rule for mods that call a model (one so far: Wait What). A mod must set `usesModel: true`, so `/mods` shows it. It must be off by default, with its cost written in its `about` text and in the README. It must use the cheapest model (the `haiku` alias). It must make at most 30 model calls an hour by default, with a setting for the number. The helper is in `hooks/retell.ts` (`callLimit`, `canCall`, `addCall`, `recentCalls`): a pure rolling-hour counter. The model call itself is made by the dispatcher (`runAsk` in `hooks/register.tsx`), which takes the shared lock, cancels the call at the next prompt, and gives the reply back to the mod.
 - Sound is off by default. See "Settings".
 - Mod errors are caught one by one and written to the UI log. One failing mod does not stop the others.
 
@@ -245,16 +321,21 @@ type Feature<S> = {
   usesModel?: boolean   // shown in /mods
   hasSound?: boolean    // shown in /mods
   defaultOn: boolean
-  turnComplete?: (state, { e, context }, ctx) => { state?, sound?, toast? } | undefined
+  turnComplete?: (state, { e, context, hasTerminal }, ctx) => { state?, sound?, toast?, ask? } | undefined
   turnStart?:    (state, { e }, ctx)          => { state?, sound?, toast? } | undefined
   sessionStart?: (state, { e }, ctx)          => { state?, sound?, toast? } | undefined
   sessionEnd?:   (state, { e }, ctx)          => { state?, sound?, toast? } | undefined   // exit or /clear
   compacted?:    (state, ctx)                 => { state?, sound?, toast? } | undefined   // the main conversation was compacted
   tick?:         (state, ctx)                 => { state?, sound?, toast? } | undefined   // once a minute
+  modelDone?:    (state, { turnId, reply }, ctx) => { state?, sound?, toast? } | undefined   // the model call that `ask` started has ended
   band?: (state, { props, now, options, isCompacting }, el, { compact }) => RenderElement | null
                                                 // one row; `el` is { Box, Text, Button, ... }; `compact` is a click handler
+  bandLines?: (state, { props, now, options, isCompacting }) => number   // 1 (default) or 2: how many lines `band` draws now
 }
-// ctx = { isSoundAllowed, now, options }   now: ms from the engine clock (NaN if unreadable); options: the plugin settings
+// ctx = { isSoundAllowed, now, options, isBusy }   now: ms from the engine clock (NaN if unreadable); options: the plugin settings
+//   isBusy: the shared lock is held (a compaction or a model call): do not start an automatic action
+// ask = { turnId, model, system, prompt, maxTokens, timeoutMs, effort? }: a model call for the dispatcher to make, detached, only when ctx.isBusy was false.
+//   Its reply comes to `modelDone` as { turnId, reply: { isAnswered: true, text } | { isAnswered: false } }.
 ```
 
 Steps:
@@ -266,6 +347,8 @@ Steps:
 5. Add tests. Run `claude plugin test` and `claude plugin validate`.
 
 `state` is kept in `$.state` under the id of the mod, so it survives a hot reload. `sound` is a file of the plugin (`assets/x.wav`). The dispatcher plays it only when `ctx.isSoundAllowed` is true.
+
+A mod that spends model tokens also: sets `usesModel: true` and `defaultOn: false`, states the cost in `about` and in the README, checks `ctx.isBusy` and the hourly cap before it returns `ask`, drops a reply in `modelDone` whose `turnId` is no longer the one it is waiting for (read from the state, which the dispatcher reads again), and cleans the model's text before it draws it.
 
 ## Development
 
@@ -290,6 +373,7 @@ Files:
 | `hooks/mods-command.ts` | Pure: the `/mods` parser. |
 | `hooks/token-weather.tsx`, `hooks/forecast.ts` | The Token Weather mod and its pure logic. |
 | `hooks/cache-keeper.tsx`, `hooks/cache-clock.ts` | The Cache Keeper mod and its pure logic: the lifetime setting, the countdown, the words. The lock, the timer and the compaction call are in `register.tsx`. |
+| `hooks/wait-what.tsx`, `hooks/retell.ts` | The Wait What mod and its pure logic: the hourly cap, what is sent and how it is cut, the reply cleaning, the fitting of lines to the band. The lock, the model call and its cancelling are in `register.tsx`. |
 | `hooks/blast-radius.ts` | The Blast Radius mod: the rule table, the preview plans and text, the dialog text. Pure. |
 | `types/index.d.ts` | The `$.state` contract. |
 | `assets/thunder.wav`, `scripts/make-sounds.js` | The sound and the script that makes it. |
@@ -300,7 +384,8 @@ Files:
 - `claude plugin validate` passes for the plugin manifest, the hooks module and the marketplace manifest.
 - Blast Radius: the kit runs `tool.call` through the plugin with the dialog, `process.run`, `fs.stat` and `fs.list` stubbed beneath it. It checks Proceed, Cancel, a dismissed dialog, no one to ask, another answer, a safe command, the off switch, a failing preview, and a crash in the check. The stub plays the person: no dialog was drawn.
 - Cache Keeper: the kit mounts the band through the plugin on a clock that only the test moves. It checks the row text at each stage, the one toast, the restart at a new response, a subagent turn, a running turn, an interrupted turn, `/clear`, the lifetime setting (valid and invalid), the compact button (done, vetoed, rejected, two presses at once, a compaction started by someone else), the timer (one per session, stopped at `session.end`), the off switches, and the band beside Token Weather and a stub standing for next-steps. A mutation check was run: removing the clock restart, the subagent guard, or the lock guard each made the right tests fail. The kit cannot show the real cache: whether a cache is warm, the real lifetime of an account, or what the engine's `session.compact` does with a real conversation. The stub plays those.
-- Not verified: how it looks in a real terminal, how the Blast Radius question looks on screen, what the real `claude -p` does with a risky command (the code fails closed, from the type declarations), the real sound output, the install from GitHub, and a run beside the real next-steps plugin.
+- Wait What: the kit runs the plugin with the model stubbed beneath it (`model.complete` answers, fails, throws, or is held on a clock that only the test moves). It checks that the default makes zero calls (the stub is never reached), the request (the `haiku` alias, 120 tokens, 15 seconds, no history, the answer cut to 4,000 characters with its start and end kept), every skip rule, the terminal-only rule, that `turn.complete` resolves while the model is still working (the call is detached), the drop of a late reply (a new prompt, a newer answer, `/clear`, `/mods off`), a failed, empty or throwing call (no row, no toast, no crash, the lock free, still counted), the cleaning of a reply with escape sequences, the hourly cap (window, limit, 0, invalid, the default of 30, `/clear`), the lock (no call during a compaction, the compact button during a call, a compaction that starts during a call), and a 2-line row beside Token Weather, Cache Keeper and a stub standing for next-steps, at each row budget. A mutation check was run: removing the cap, the late-reply check, the lock check, the compaction takeover, the lock ownership check, the detached call, the cancel at `turn.start`, the 2-line compositor, the terminal check, the length minimum and the truncation each made the right tests fail and no others. Two mutations did not make a test fail: dropping the abort check after a call (the late-reply check catches the same cases, so that line is a second layer that no test isolates), and charging a 2-line row as one row in the compositor's budget (not observable today: Wait What is the last mod that draws, so no row follows it). The kit cannot show: what the real model answers, whether `haiku` is allowed, the real cost and delay, that the real engine keeps the call out of the transcript, and whether the cancel at the next prompt stops the real request.
+- Not verified: how it looks in a real terminal, how the Blast Radius question looks on screen, what the real `claude -p` does with a risky command (the code fails closed, from the type declarations), the real sound output, the install from GitHub, a run beside the real next-steps plugin, and any Wait What retell on a real screen or from a real model.
 
 ## License
 

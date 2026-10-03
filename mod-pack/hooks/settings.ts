@@ -45,4 +45,6 @@ export const isSoundAllowed = (feature: Pick<Feature, 'hasSound'>, isOn: boolean
 // beneath it drew, so it claims at most one third of `maxRows`, and never more
 // than MAX_OWN_ROWS. Under 3 rows of room it adds none.
 export const MAX_OWN_ROWS = 4
+// The most lines one mod's row may take (a feature's `bandLines`). Wait What takes 2.
+export const MAX_ROW_LINES = 2
 export const rowBudget = (maxRows: number) => Math.max(0, Math.min(MAX_OWN_ROWS, Math.floor(maxRows / 3)))

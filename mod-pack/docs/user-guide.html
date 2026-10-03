@@ -35,8 +35,8 @@ footer{margin-top:48px;border-top:1px solid var(--line);padding-top:14px;font-si
 <body>
 <header><div class="wrap">
 <h1>mod-pack <span>User Guide</span>: Test Steps</h1>
-<p>How to load <code>mod-pack</code> into a running Claude Code session and test its three mods, Token Weather, Blast Radius and Cache Keeper, in 27 steps. You do not need to exit the session.</p>
-<p class="muted">Version 0.1.0. Written 2026-10-02. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 27 below are the first on-screen check.</p>
+<p>How to load <code>mod-pack</code> into a running Claude Code session and test its four mods, Token Weather, Blast Radius, Cache Keeper and Wait What, in 41 steps. You do not need to exit the session.</p>
+<p class="muted">Version 0.1.0. Written 2026-10-02, extended 2026-10-03. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 41 below are the first on-screen check. Wait What (steps 28 to 41) spends model tokens: read its warning first.</p>
 </div></header>
 <div class="wrap">
 
@@ -138,7 +138,37 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 </table>
 <p class="muted">The countdown starts when the answer ends. Anthropic counts the lifetime from the start of the last request, so the row can show a little more time than is left. A model switch or a changed tool list can make the cache cold early, and the row does not see that.</p>
 
-<h2>6. What these tests cannot show</h2>
+<h2>6. Test Wait What (steps 28 to 41)</h2>
+<p>Wait What retells a long answer in plain words, in at most 2 short lines, in the band above the prompt. From this mod on, <code>/mods</code> lists four mods: <code>token-weather</code>, <code>cache-keeper</code>, <code>wait-what</code> and <code>blast-radius</code>. Wait What is OFF until you turn it on.</p>
+<div class="note warn"><b>Wait What spends model tokens and sends your answers to the model.</b> Each retold answer is one call to the cheapest model (the <code>haiku</code> alias), on your own plan. The call sends up to 4000 characters of the answer's text and reads back at most 120 tokens. Test it in a session whose answers you are willing to send a second time. The default limit is 30 calls an hour, per session. Steps 28 to 41 use about 6 to 10 retold answers.</div>
+<div class="note"><b>The number of lines depends on the terminal height.</b> The pack may use one third of the rows that the band is allowed, and the band is allowed up to half of the terminal's rows. With Token Weather and Cache Keeper both showing, Wait What gets 2 lines in a tall terminal, 1 line in a medium one, and none in a short one. The exact heights were not measured. Use a tall window for steps 31 to 35, and see step 36 for the other sizes. The limit setting <code>maxModelCallsPerHour</code> goes in the same place as <code>cacheTtlMinutes</code> (see section 5).</div>
+<table>
+<tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
+<tr><td>28</td><td>Type <code>/mods</code>.</td><td>A line <code>OFF  wait-what  Wait What: plain-words retell of each long answer ...</code> that ends with <code>[uses model tokens]</code>. It says SPENDS model tokens and OFF by default.</td></tr>
+<tr><td>29</td><td>With Wait What OFF, send <code>Explain how a hash table handles collisions, in about 300 words.</code> and wait for the answer.</td><td>No <code>wait what:</code> row. The weather and cache rows show as before. No model call is made.</td></tr>
+<tr><td>30</td><td>Type <code>/mods on wait-what</code>.</td><td><code>mod-pack: wait-what is ON.</code></td></tr>
+<tr><td>31</td><td>Send the same prompt as in step 29. Look at the band while Claude works, then after the answer.</td><td>While Claude works: no retell. After the answer ends, a second or more later: a row <code>wait what: ...</code> of 1 or 2 lines, below the cache row (and below the weather row and the <code>next:</code> suggestions, if installed). All of them show.</td></tr>
+<tr><td>32</td><td>Read the retell and the answer.</td><td>The retell says the same thing in plainer words. It has no list marks, no heading, no bold, and at most 2 lines. A retell is a model's summary and can be wrong.</td></tr>
+<tr><td>33</td><td>Send <code>Reply with only the word ok.</code></td><td>No retell for this answer: it is shorter than 200 characters. The row of step 31 is gone from the moment you sent the prompt.</td></tr>
+<tr><td>34</td><td>Repeat step 31. As soon as the answer ends, send any new prompt before the retell shows.</td><td>No retell of the old answer shows later. The late reply is dropped.</td></tr>
+<tr><td>35</td><td>Send the prompt of step 29 and press Esc while Claude is still writing.</td><td>No retell for the interrupted turn.</td></tr>
+<tr><td>36</td><td>Repeat step 31, then make the terminal window shorter, then taller.</td><td>The Wait What row goes from 2 lines to 1 line, then to none, in that order, as the window gets shorter. The weather row goes last. Taller, they come back. The row never overwrites the others.</td></tr>
+<tr><td>37</td><td>Optional, depends on timing. Repeat step 31, and click <b>compact</b> in the cache row at once when the answer ends, before the retell shows.</td><td>Either a toast <code>Cache Keeper: a Wait What retell is running. Press compact again in a few seconds.</code> (and no compaction), or the compaction runs (the retell had already ended). Both are correct. This warns you that the compaction is a real one.</td></tr>
+<tr><td>38</td><td>Set <code>maxModelCallsPerHour</code> to <code>2</code>. Send the prompt of step 29 three times in a row, waiting for each answer.</td><td>The first two answers are retold. After the third, the band shows one dim line <code>wait-what: hourly limit reached</code> and no retell. The line goes when you send the next prompt.</td></tr>
+<tr><td>39</td><td>Type <code>/clear</code>, then send the prompt of step 29 again, within the hour of step 38.</td><td>The band is empty after <code>/clear</code>. After the answer, the line <code>wait-what: hourly limit reached</code> shows again: <code>/clear</code> does not reset the count.</td></tr>
+<tr><td>40</td><td>Set <code>maxModelCallsPerHour</code> back to <code>30</code>.</td><td>The next long answer is retold again (the count of the session is kept, 30 is far above it).</td></tr>
+<tr><td>41</td><td>After a retold answer, type <code>/mods off wait-what</code>. Then send the prompt of step 29.</td><td>The retell disappears at once. The next long answer has no retell. The weather and cache rows and other plugins' output stay.</td></tr>
+</table>
+<h3>How to read the Wait What row</h3>
+<table>
+<tr><th>Part</th><th>Meaning</th></tr>
+<tr><td>wait what: ...</td><td>The model's retell of the last answer. 1 or 2 lines. A line that does not fit the width ends with <code>…</code>.</td></tr>
+<tr><td>wait-what: hourly limit reached</td><td>The answer was long enough, but the hourly limit refused the call. Nothing was sent. It shows until your next prompt.</td></tr>
+<tr><td>nothing</td><td>The answer was shorter than 200 characters, or Claude's turn was interrupted, or the call failed, or it is still running. A failed call shows nothing and still counts toward the limit.</td></tr>
+</table>
+<p class="muted">The next prompt, <code>/clear</code> and the end of the session cancel a call that is still running. <code>/mods off wait-what</code> lets a running call end (15 seconds at most) and drops its reply.</p>
+
+<h2>7. What these tests cannot show</h2>
 <ul>
 <li><b>Storm and Compact soon colors.</b> A 1M window needs 750k tokens to reach Storm. There is no cheap way to get there in a test.</li>
 <li><b>Sound.</b> It is silent on Windows and Linux. Only macOS plays plugin sound.</li>
@@ -146,14 +176,18 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <li><b>Cache Keeper against the real cache.</b> The row is a countdown of a timer. Nothing here checks whether the real cache is warm, or what lifetime your account has. A model switch can make the cache cold early.</li>
 <li><b>The compact button by keyboard.</b> Step 21 clicks it. Focusing the band with ctrl+x then Tab and pressing Enter was not checked.</li>
 <li><b>Dialog order.</b> The type documentation says the Blast Radius dialog comes before Claude's own permission prompt. It has not been observed.</li>
+<li><b>What Wait What costs.</b> No call was measured. The size of a retell call is an estimate (about 1,000 tokens in at most, 120 out at most). Check your own usage view after the steps.</li>
+<li><b>That the retell stays out of the transcript.</b> The type declarations say the call has no history and the plugin adds nothing to the conversation. Look at the transcript after step 31: no retell should be in it.</li>
+<li><b>Wait What beside the real next-steps plugin.</b> Both can run after the same answer, each with its own call. Step 31 is the first check of the two together.</li>
+<li><b>The row heights.</b> The terminal heights at which Wait What shows 2 lines, 1 line or none were not measured (step 36).</li>
 </ul>
 
-<h2>7. Undo</h2>
+<h2>8. Undo</h2>
 <pre><code>Remove-Item -Recurse "$w\mod-pack"
 # restore the old mod, if you moved one:
 Move-Item "C:\Users\&lt;you&gt;\.claude\dev-mods-disabled\token-weather-old" "$w\token-weather"</code></pre>
 
-<h2>8. What to report</h2>
+<h2>9. What to report</h2>
 <p>Send the number of any step whose result differs from the expected result. Add a screenshot or the text you see, and any dim line in the transcript that names <code>mod-pack</code>.</p>
 
 <footer>mod-pack 0.1.0 · MIT license · A mod is code that runs with your permissions. Run <code>claude plugin validate</code> on any mod before you install it.</footer>
