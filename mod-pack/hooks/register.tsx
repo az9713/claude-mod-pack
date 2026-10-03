@@ -23,13 +23,17 @@ import { promptQueue } from './prompt-queue'
 import { runQ } from './queue'
 import type { Queue } from './queue'
 import { isFeatureOn, isSoundAllowed, isSoundOn, layoutRows, parseOverrides, rowBudget, STORE_KEY } from './settings'
+import { MIN_COLUMNS, PANE_ROWS, snake, snakeView } from './snake'
+import { halt, newGame, parseBest, pauseFor, restart, resumeFrom, steer, step, toggle } from './snake-game'
+import type { Dir, SnakeGame } from './snake-game'
 import { tokenWeather } from './token-weather'
 import { waitWhat } from './wait-what'
 import type { ModPackFeatureStates } from '../types'
 
-// The order is the row order in the band. Blast Radius draws no row. Prompt Queue stands before
-// Wait What on purpose: its row is 1 line and must not be starved by a 2-line retell.
-const FEATURES: readonly Feature[] = [tokenWeather, cacheKeeper, promptQueue, waitWhat, blastRadius]
+// The order is the row order in the band. Blast Radius and Snake draw no row (Snake draws a pane).
+// Prompt Queue stands before Wait What on purpose: its row is 1 line and must not be starved by a
+// 2-line retell.
+const FEATURES: readonly Feature[] = [tokenWeather, cacheKeeper, promptQueue, waitWhat, blastRadius, snake]
 
 // Every feature's state, by feature id.
 const featureStates = atom({ plugin: 'mod-pack', key: 'features' } as const, {} as ModPackFeatureStates)
@@ -389,12 +393,18 @@ async function previewRisk($: EngineInterface, risk: Risk, cwd: string | undefin
 
 // Asks the person. Resolves the label chosen, or the text typed under "Other", or
 // undefined when `$.ui.ask` rejects. It rejects when the dialog is dismissed, and in a
-// `claude -p` run, where nobody can be asked.
-async function askPerson($: EngineInterface, question: string): Promise<string | undefined> {
-  return $.ui.ask(question, { options: [PROCEED, CANCEL], header: DIALOG_HEADER }).then(
-    answer => answer,
-    () => undefined,
-  )
+// `claude -p` run, where nobody can be asked. While the question is open a Snake game that is
+// running is paused (`holdSnake`): the dialog takes the keyboard, so the person cannot steer.
+async function askPerson($: EngineInterface, options: PluginOptions, question: string): Promise<string | undefined> {
+  await holdSnake($, options, true)
+  try {
+    return await $.ui.ask(question, { options: [PROCEED, CANCEL], header: DIALOG_HEADER }).then(
+      answer => answer,
+      () => undefined,
+    )
+  } finally {
+    await holdSnake($, options, false)
+  }
 }
 
 // The `tool.call` guard for the shell tools. A safe command, or the mod switched off,
@@ -411,7 +421,7 @@ async function guardShell($: EngineInterface, options: PluginOptions, command: s
   for (const risk of risks.slice(0, MAX_RISKS_PREVIEWED)) preview.push(...(await previewRisk($, risk, cwd)))
   if (risks.length > MAX_RISKS_PREVIEWED) preview.push(`...and ${risks.length - MAX_RISKS_PREVIEWED} more risky parts of the command`)
 
-  const answer = await askPerson($, buildQuestion(command, risks, preview))
+  const answer = await askPerson($, options, buildQuestion(command, risks, preview))
   return isProceed(answer) ? proceed() : { deny: denyReason(answer, risks.map(r => r.kind)) }
 }
 
@@ -434,7 +444,7 @@ async function guardShellFailed($: EngineInterface, options: PluginOptions, comm
 
   const why = failure.message ? ` (${failure.message.slice(0, 120)})` : ''
   const question = buildQuestion(command, risks ?? [], [`${NO_PREVIEW}: the Blast Radius check itself failed${why}.`])
-  const answer = await askPerson($, question)
+  const answer = await askPerson($, options, question)
   return isProceed(answer) ? proceed() : { deny: denyReason(answer, (risks ?? []).map(r => r.kind)) }
 }
 
@@ -473,6 +483,130 @@ async function queueCommand($: EngineInterface, options: PluginOptions, args: st
   })
 }
 
+// ---- Snake ------------------------------------------------------------------------
+// The rules are in snake-game.ts, the drawing in snake.tsx. The engine calls are here: the pane, the
+// timer, the pause and the resume, the command and the high score.
+//
+// The game has its OWN state key (`snakeGame`), not an entry of `featureStates`: it is written about
+// 7 times a second while it runs, and every reader of `featureStates` (the band compositor) would be
+// drawn again each time. Only the pane reads `snakeGame`, so only the pane is redrawn: `$.state.set`
+// draws its readers, and nobody calls `$.ui.invalidate`.
+//
+// The tick is 150 ms: about 7 moves and 7 redraws a second. The engine folds redraws above 10 a second
+// (30 for the pane that is shown), so every tick draws. A faster tick would be a faster game, not a
+// smoother one. The timer is plain module state: a hot reload drops it with the old environment, and
+// the game then waits (state `running`, no timer) until the next event that arms it: `session.start`,
+// `turn.start` or a key press. No timer is left behind: it is cancelled when the pane closes, when the
+// game stops running, when the session ends and when the mod is turned off.
+
+const snakeGame = atom({ plugin: 'mod-pack', key: 'snake' } as const, null as SnakeGame | null)
+
+const SNAKE_PANE = 'snake'
+const SNAKE_TICK_MS = 150
+// The high score. Best effort: a store that cannot be read or written gives 0 and a lost score.
+const SNAKE_BEST_KEY = 'mod-pack/snake-best'
+const SNAKE_OFF_TEXT = 'mod-pack: snake is OFF. Turn it on with /mods on snake.'
+const SNAKE_NO_TERMINAL_TEXT = 'Snake draws in a terminal pane only, and this session has no terminal. Nothing was opened.'
+
+let snakeTimer: { cancel: () => void } | undefined
+function stopSnake() {
+  snakeTimer?.cancel()
+  snakeTimer = undefined
+}
+
+// How many Blast Radius questions are open now. The game is paused while there is one or more.
+let questionsOpen = 0
+
+// Read at call time, so `/mods off snake` applies at once, with no reload.
+async function isSnakeOn($: EngineInterface, options: PluginOptions) {
+  return isFeatureOn(snake, parseOverrides(await $.store.get(STORE_KEY)), options)
+}
+
+// Starts the timer when the game is running and no timer exists. The check and the start follow each
+// other with no wait between, so two calls cannot start two timers.
+async function armSnake($: EngineInterface, options: PluginOptions) {
+  const game = await read($, snakeGame).catch(() => null)
+  if (game?.status !== 'running' || snakeTimer) return
+  snakeTimer = $.clock.every(SNAKE_TICK_MS, () => void snakeTick($, options))
+}
+
+// One move. It stops its own timer when the game is no longer running. When the game ends, the high
+// score is kept (best effort). It never throws.
+async function snakeTick($: EngineInterface, options: PluginOptions) {
+  try {
+    if (!(await isSnakeOn($, options))) return stopSnake()
+    const before = await read($, snakeGame)
+    if (before?.status !== 'running') return stopSnake()
+    const after = await update($, snakeGame, game => (game?.status === 'running' ? step(game) : game))
+    if (after?.status !== 'running') stopSnake()
+    if (after?.status === 'over' && after.best > 0) await $.store.set(SNAKE_BEST_KEY, after.best).catch(() => undefined)
+  } catch (error) {
+    $.ui.log(`mod-pack: snake tick failed: ${String(error)}`)
+  }
+}
+
+// Applies one change to the game (a key, a pause, a resume), then starts or stops the timer to match.
+// `update` reads the game again at the moment of the write, so a key and a tick that come together both
+// land. A mod that is OFF changes nothing. It never throws.
+async function snakeChange($: EngineInterface, options: PluginOptions, change: (game: SnakeGame) => SnakeGame) {
+  try {
+    if (!(await isSnakeOn($, options))) return
+    const game = await update($, snakeGame, current => (current ? change(current) : current))
+    if (game?.status === 'running') await armSnake($, options)
+    else stopSnake()
+  } catch (error) {
+    $.ui.log(`mod-pack: snake failed: ${String(error)}`)
+  }
+}
+
+// A Blast Radius question opens or closes. The first one opened pauses a running game, and the last one
+// closed resumes the game that it paused. It never throws, so the dialog is always shown.
+async function holdSnake($: EngineInterface, options: PluginOptions, isOpening: boolean) {
+  questionsOpen = isOpening ? questionsOpen + 1 : Math.max(0, questionsOpen - 1)
+  if (isOpening ? questionsOpen !== 1 : questionsOpen !== 0) return
+  await snakeChange($, options, game => (isOpening ? pauseFor(game, 'question') : resumeFrom(game, 'question')))
+}
+
+// The pane closed (the person's Esc or close mark, `/snake`, or `/mods off snake`): the timer stops and
+// the game waits, so a later turn does not start it with nothing to draw it.
+async function snakeClosed($: EngineInterface) {
+  stopSnake()
+  try {
+    await update($, snakeGame, game => (game ? halt(game) : game))
+  } catch (error) {
+    $.ui.log(`mod-pack: snake close failed: ${String(error)}`)
+  }
+}
+
+// `/snake`. It opens the pane, or closes it when it is open. The person's command seats a pane at any
+// width (the declared `$.ui.open`), but the board needs MIN_COLUMNS: a narrower terminal is told so,
+// and the pane itself says it when it is docked narrower than the board. A session with no terminal
+// gets a text answer: the Pane component is raised on every surface, but only the terminal draws it here.
+async function snakeCommand($: EngineInterface, options: PluginOptions, columns: number): Promise<{ text: string }> {
+  if (!(await isSnakeOn($, options))) return { text: SNAKE_OFF_TEXT }
+  const hasTerminal = await $.session.surfaces().then(surfaces => surfaces.includes('terminal'), () => false)
+  if (!hasTerminal) return { text: SNAKE_NO_TERMINAL_TEXT }
+
+  const panes = await $.ui.panes().catch(() => [])
+  if (panes.some(pane => pane.id === SNAKE_PANE)) {
+    await $.ui.close({ id: SNAKE_PANE }).catch(error => $.ui.log(`mod-pack: snake could not close: ${String(error)}`))
+    return { text: 'Snake closed. /snake opens it again, with the game where you left it.' }
+  }
+  if (columns < MIN_COLUMNS) return { text: `Snake needs a terminal at least ${MIN_COLUMNS} columns wide. This one is ${columns}.` }
+
+  const best = parseBest(await $.store.get(SNAKE_BEST_KEY).catch(() => undefined))
+  const now = await $.clock.now().catch(() => NaN)
+  await update($, snakeGame, game => (game ? (game.best >= best ? game : { ...game, best }) : newGame(Number.isFinite(now) ? now : 1, best)))
+
+  try {
+    const opened = await $.ui.open({ id: SNAKE_PANE, title: 'Snake', focus: true, closeOnEscape: true, rows: PANE_ROWS })
+    if (!opened.isPlaced) return { text: `Snake could not be shown now: ${opened.reason}` }
+  } catch (error) {
+    return { text: `Snake could not be opened: ${String(error).slice(0, 120)}` }
+  }
+  return { text: 'Snake opened. Press p to play. The keys w a s d p r work while the pane has the keyboard (click it, or ctrl+x then Tab). Esc or /snake closes it.' }
+}
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command
@@ -482,8 +616,14 @@ export const register: Register = (on, options) => {
     await $.command
       .register({ name: 'q', description: 'Queue follow-up prompts. They send one at a time when a turn ends.', argumentHint: '<text> | rm <n> | clear | pause | resume', immediate: true })
       .catch(error => $.ui.log(`mod-pack: could not register /q: ${String(error)}`))
+    // `immediate`: the point of Snake is to open it while Claude works.
+    await $.command
+      .register({ name: 'snake', description: 'Play Snake in a pane. It pauses when Claude finishes and goes on at your next prompt.', immediate: true })
+      .catch(error => $.ui.log(`mod-pack: could not register /snake: ${String(error)}`))
     await dispatch($, options, (feature, state, ctx) => feature.sessionStart?.(state, { e }, ctx))
     await armTicker($, options)
+    // A hot reload drops the timer and keeps the game: a running game gets its timer back.
+    await armSnake($, options)
     return next(e)
   })
 
@@ -491,6 +631,8 @@ export const register: Register = (on, options) => {
     stopTicker()
     cancelAsk()
     releaseSubmit()
+    stopSnake()
+    await snakeChange($, options, halt)
     await dispatch($, options, (feature, state, ctx) => feature.sessionEnd?.(state, { e }, ctx)).catch(() => undefined)
     return next(e)
   })
@@ -522,6 +664,8 @@ export const register: Register = (on, options) => {
     releaseSubmit()
     await dispatch($, options, (feature, state, ctx) => feature.turnStart?.(state, { e }, ctx))
     await armTicker($, options)
+    // A game that Claude's end paused goes on: the next prompt has started a turn.
+    await snakeChange($, options, game => resumeFrom(game, 'claude'))
     return next(e)
   })
 
@@ -531,13 +675,21 @@ export const register: Register = (on, options) => {
     const hasTerminal = await $.session.surfaces().then(surfaces => surfaces.includes('terminal'), () => false)
     await dispatch($, options, (feature, state, ctx) => feature.turnComplete?.(state, { e, context, hasTerminal }, ctx))
     await armTicker($, options)
+    // The main conversation's turn ended: a running game pauses. A subagent's turn is not Claude finishing.
+    if (e.agentId === undefined) await snakeChange($, options, game => pauseFor(game, 'claude'))
     return next(e)
   })
 
   on('command.run', { command: 'mods' }, async ($, e) => {
-    const result = runMods(e.args, FEATURES, parseOverrides(await $.store.get(STORE_KEY)), options)
+    const before = parseOverrides(await $.store.get(STORE_KEY))
+    const result = runMods(e.args, FEATURES, before, options)
     if (result.isChanged) {
       await $.store.set(STORE_KEY, result.overrides)
+      // Snake switched off: its pane closes and its timer stops at once.
+      if (isFeatureOn(snake, before, options) && !isFeatureOn(snake, result.overrides, options)) {
+        stopSnake()
+        await $.ui.close({ id: SNAKE_PANE }).catch(() => undefined)
+      }
       // A queue that is switched off is emptied: prompts that were queued must not send by themselves
       // later, after /mods on, when the person has forgotten them.
       if (!isFeatureOn(promptQueue, result.overrides, options)) {
@@ -550,6 +702,46 @@ export const register: Register = (on, options) => {
 
   // Prompt Queue. Matched by command name, so it does not clash with other plugins' command.run hooks.
   on('command.run', { command: 'q' }, ($, e) => queueCommand($, options, e.args))
+
+  // Snake. Matched by command name, by pane id and by request id, so none of these clash with other plugins.
+  on('command.run', { command: 'snake' }, ($, e) => snakeCommand($, options, e.presentation.columns))
+
+  // The pane closed. A hook that answers without `next` keeps the pane open, so this one calls it.
+  on('ui.close', { id: SNAKE_PANE }, async ($, e, next) => {
+    const result = await next(e)
+    await snakeClosed($)
+    return result
+  })
+
+  // The Snake pane. It calls `next` and keeps what is below, as every `ui.render` hook of the pack does,
+  // although only this plugin draws this pane: another plugin that hooks this pane still shows. Nothing
+  // may be beneath a pane that only this plugin draws, and in the test kit the bottom of the chain then
+  // throws (no implementation for ui.render). So a failing `next` counts as nothing below, and the pane
+  // is drawn all the same. What the real engine answers there was not seen. The hook reads the game, so
+  // a write to the game (a tick, a key) draws the pane again.
+  on('ui.render', { component: 'Pane', requestId: SNAKE_PANE }, async ($, e, next) => {
+    const below = await next(e).catch(() => undefined)
+    if (e.surface !== 'terminal') {
+      const { Box } = $.ui.resolve(e)
+      return below ?? <Box />
+    }
+    const el = $.ui.resolve(e)
+    const { Box } = el
+    const game = await read($, snakeGame)
+    if (!game) return below ?? <Box />
+
+    const actions = {
+      steer: (dir: Dir) => void snakeChange($, options, current => steer(current, dir)),
+      toggle: () => void snakeChange($, options, toggle),
+      restart: () => void snakeChange($, options, restart),
+    }
+    return (
+      <Box flexDirection="column">
+        {below}
+        {snakeView(game, e.props, el, actions)}
+      </Box>
+    )
+  })
 
   // Blast Radius. Matched by tool name, so it does not clash with the tool.call hooks
   // of other plugins. PowerShell is a tool of its own with the same `command` field.

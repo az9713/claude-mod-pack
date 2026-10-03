@@ -56,6 +56,13 @@
       "required": false,
       "default": true
     },
+    "snake": {
+      "type": "boolean",
+      "title": "Snake",
+      "description": "Type /snake to play Snake in a pane. It pauses when Claude finishes and goes on when you send the next prompt. The keys w a s d p r work while the pane has the keyboard. Terminal only. Costs no model tokens.",
+      "required": false,
+      "default": true
+    },
     "sound": {
       "type": "boolean",
       "title": "Sound",

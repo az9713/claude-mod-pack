@@ -107,7 +107,7 @@ const ON = { options: { waitWhat: true } }
 test('session.start registers /q as an immediate command (it must run while a turn runs) beside /mods', async ($, on) => {
   const w = world(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-  expect(w.registered.map(r => r.name)).toEqual(['mods', 'q'])
+  expect(w.registered.map(r => r.name)).toEqual(['mods', 'q', 'snake'])
   const spec = w.registered.find(r => r.name === 'q')
   expect(spec.immediate).toBe(true)
   expect(spec.argumentHint).toContain('<text>')

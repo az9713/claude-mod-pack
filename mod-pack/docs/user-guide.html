@@ -35,8 +35,8 @@ footer{margin-top:48px;border-top:1px solid var(--line);padding-top:14px;font-si
 <body>
 <header><div class="wrap">
 <h1>mod-pack <span>User Guide</span>: Test Steps</h1>
-<p>How to load <code>mod-pack</code> into a running Claude Code session and test its five mods, Token Weather, Blast Radius, Cache Keeper, Wait What and Prompt Queue, in 56 steps. You do not need to exit the session.</p>
-<p class="muted">Version 0.1.0. Written 2026-10-02, extended 2026-10-03. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 56 below are the first on-screen check. Wait What (steps 28 to 41) spends model tokens: read its warning first. Prompt Queue (steps 42 to 56) sends real prompts by itself: read its warning first.</p>
+<p>How to load <code>mod-pack</code> into a running Claude Code session and test its six mods, Token Weather, Blast Radius, Cache Keeper, Wait What, Prompt Queue and Snake, in 77 steps. You do not need to exit the session.</p>
+<p class="muted">Version 0.1.0. Written 2026-10-02, extended 2026-10-03. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 77 below are the first on-screen check. Wait What (steps 28 to 41) spends model tokens: read its warning first. Prompt Queue (steps 42 to 56) sends real prompts by itself: read its warning first. Snake (steps 57 to 77) pauses and resumes by itself while Claude works: read its notes first.</p>
 </div></header>
 <div class="wrap">
 
@@ -79,24 +79,24 @@ robocopy "&lt;path-to&gt;\mod-pack" "$w\mod-pack" /E /XD .git | Out-Null</code><
 <tr><th>Part</th><th>Meaning</th></tr>
 <tr><td>☀ Clear</td><td>The context window is under 25% full. Other bands: ☁ Cloudy 25–49%, ☂ Showers 50–74%, ☇ Storm 75–89%, ↯ Compact soon 90% and up.</td></tr>
 <tr><td>18%</td><td>Tokens in use divided by the window size.</td></tr>
-<tr><td>184.4k / 1M</td><td>Tokens in use, then the window size. The size comes from the session, not from a fixed number.</td></tr>
+<tr><td>184.4k / 1M</td><td>Tokens in use, then the window size. The session reports the size, and the code holds no fixed number.</td></tr>
 <tr><td>▂▂</td><td>One bar for each of the last 12 finished turns, oldest on the left. Each bar is the share of the window in use, in steps of 12.5%.</td></tr>
 <tr><td>▲ +3.6k last turn</td><td>The tokens the last turn added. <code>▼</code> means the window got smaller, which happens after a compaction.</td></tr>
 </table>
 
 <h2>4. Test Blast Radius (steps 9 to 14)</h2>
-<div class="note warn"><b>Test on a throwaway folder only.</b> Blast Radius holds risky commands, but you must never test it on a real folder. Create the scratch folder first, in Git Bash. You can type <code>!</code> before each line to run it inside the session.</div>
+<div class="note warn"><b>Test on a throwaway folder only.</b> The steps below delete folders, so run them only on the scratch folder. Never point them at a real folder. Create the scratch folder first, in Git Bash. You can type <code>!</code> before each line to run it inside the session.</div>
 <pre><code>mkdir -p /tmp/mp-test/victim-a /tmp/mp-test/victim-b
 echo hi > /tmp/mp-test/victim-a/f.txt
 echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <p>Then send these prompts one at a time:</p>
 <table>
 <tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
-<tr><td>9</td><td><code>Use the Bash tool to run exactly: ls /tmp/mp-test</code></td><td>No dialog. The command runs.</td></tr>
+<tr><td>9</td><td><code>Use the Bash tool to run exactly: ls /tmp/mp-test</code></td><td>The command runs without a dialog.</td></tr>
 <tr><td>10</td><td><code>Use the Bash tool to run exactly: rm -rf /tmp/mp-test/victim-a</code></td><td>A dialog titled Blast Radius, with a preview and the options <b>Proceed</b> and <b>Cancel</b>.</td></tr>
 <tr><td>11</td><td>Choose <b>Cancel</b>.</td><td>Claude is told the person cancelled. <code>victim-a</code> still exists.</td></tr>
 <tr><td>12</td><td>Repeat step 10 and choose <b>Proceed</b>.</td><td><code>victim-a</code> is deleted.</td></tr>
-<tr><td>13</td><td>Type <code>/mods off blast-radius</code>, then ask for <code>rm -rf /tmp/mp-test/victim-b</code>.</td><td>No dialog. The folder is deleted.</td></tr>
+<tr><td>13</td><td>Type <code>/mods off blast-radius</code>, then ask for <code>rm -rf /tmp/mp-test/victim-b</code>.</td><td>The folder is deleted without a dialog.</td></tr>
 <tr><td>14</td><td>Type <code>/mods on blast-radius</code>.</td><td>The guard works again.</td></tr>
 </table>
 <h3>What Blast Radius holds</h3>
@@ -106,7 +106,7 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <li><code>git reset --hard</code>, <code>git clean</code> with a force flag, <code>git push --force</code>, <code>--force-with-lease</code> and <code>+ref</code>.</li>
 <li><code>git checkout -- .</code>, <code>git restore .</code>, <code>git branch -D</code>, <code>git stash drop</code> and <code>git stash clear</code>.</li>
 </ul>
-<p>It does not hold <code>rm file</code>, <code>rm -f file</code>, <code>git clean -n</code>, or plain <code>git push</code>. It is a safety net, not a permission system. Aliases, scripts that call <code>rm</code>, commands built from variables, <code>find -delete</code>, <code>dd</code> and redirects get past it.</p>
+<p>It does not hold <code>rm file</code>, <code>rm -f file</code>, <code>git clean -n</code>, or plain <code>git push</code>. It checks the text of one shell command and does not replace the permission rules of Claude Code. Aliases, scripts that call <code>rm</code>, commands built from variables, <code>find -delete</code>, <code>dd</code> and redirects get past it.</p>
 
 <h2>5. Test Cache Keeper (steps 15 to 27)</h2>
 <p>Cache Keeper counts down how long the prompt cache stays warm after Claude's last response. From this mod on, <code>/mods</code> (steps 2 and 4) lists three mods: <code>token-weather</code>, <code>cache-keeper</code> and <code>blast-radius</code>.</p>
@@ -117,14 +117,14 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <tr><td>15</td><td>Type <code>/mods</code>.</td><td>A line <code>ON  cache-keeper  Cache Keeper: countdown of how long the prompt cache stays warm ...</code> with no <code>[uses model tokens]</code> flag.</td></tr>
 <tr><td>16</td><td>Send any prompt. Look at the band while Claude works, then after the answer.</td><td>While Claude works: no cache row. After the answer: a row such as <code>⏱ cache warm 60m left · 160k tokens [ compact ]</code>, below the weather row (and below the <code>next:</code> suggestions, if installed). All of them show.</td></tr>
 <tr><td>17</td><td>Compare the tokens in the cache row with the weather row.</td><td>Both show the same context size.</td></tr>
-<tr><td>18</td><td>Set <code>cacheTtlMinutes</code> to <code>2</code>. Send a prompt and wait for the answer. Wait 2 minutes. The row redraws once a minute.</td><td>First <code>⏱ cache cools in 2m</code> in yellow, then <code>⏱ cache cold: next prompt re-reads 160k tokens uncached</code> in red. No dollar amount. No toast (a 2 minute lifetime has no warm part).</td></tr>
+<tr><td>18</td><td>Set <code>cacheTtlMinutes</code> to <code>2</code>. Send a prompt and wait for the answer. Wait 2 minutes. The row redraws once a minute.</td><td>First <code>⏱ cache cools in 2m</code> in yellow, then <code>⏱ cache cold: next prompt re-reads 160k tokens uncached</code> in red. The row shows no dollar amount, and no toast comes because a 2 minute lifetime has no warm part.</td></tr>
 <tr><td>19</td><td>Set <code>cacheTtlMinutes</code> to <code>7</code>. Send a prompt. Wait about 3 minutes.</td><td>The row is warm for the first 2 minutes, then <code>cools in</code> with the minutes left. One toast, <code>Prompt cache cools in ...</code>, shows when the cache enters its last 5 minutes, up to 1 minute late. It does not show again for this answer.</td></tr>
-<tr><td>20</td><td>Send another prompt after the cache went cold.</td><td>No row while Claude works. After the answer the countdown starts again from the full lifetime.</td></tr>
+<tr><td>20</td><td>Send another prompt after the cache went cold.</td><td>While Claude works there is no cache row. After the answer the countdown starts again from the full lifetime.</td></tr>
 <tr><td>21</td><td>After an answer, click <b>compact</b> in the cache row.</td><td>The row says <code>⏱ compacting…</code> with no button. When the compaction ends the cache row is gone. The transcript shows a compaction.</td></tr>
 <tr><td>22</td><td>Send a prompt after the compaction.</td><td>The cache row comes back after the answer, with a smaller token count.</td></tr>
 <tr><td>23</td><td>Type <code>/compact</code> yourself, with the cache row showing.</td><td>The row says <code>⏱ compacting…</code> while it runs, then goes until the next answer.</td></tr>
 <tr><td>24</td><td>Type <code>/clear</code>.</td><td>The cache row is gone until the next answer.</td></tr>
-<tr><td>25</td><td>After an answer, type <code>/mods off cache-keeper</code>.</td><td>The cache row disappears at once. No toast comes later. The weather row and other plugins' output stay.</td></tr>
+<tr><td>25</td><td>After an answer, type <code>/mods off cache-keeper</code>.</td><td>The cache row disappears at once, no toast comes later, and the weather row and other plugins' output stay.</td></tr>
 <tr><td>26</td><td>Type <code>/mods on cache-keeper</code>.</td><td>The row returns, counting from the last answer.</td></tr>
 <tr><td>27</td><td>Set <code>cacheTtlMinutes</code> back to <code>60</code> (or <code>5</code> on an API key).</td><td>The row counts that lifetime again after the next answer.</td></tr>
 </table>
@@ -145,14 +145,14 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <table>
 <tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
 <tr><td>28</td><td>Type <code>/mods</code>.</td><td>A line <code>OFF  wait-what  Wait What: plain-words retell of each long answer ...</code> that ends with <code>[uses model tokens]</code>. It says SPENDS model tokens and OFF by default.</td></tr>
-<tr><td>29</td><td>With Wait What OFF, send <code>Explain how a hash table handles collisions, in about 300 words.</code> and wait for the answer.</td><td>No <code>wait what:</code> row. The weather and cache rows show as before. No model call is made.</td></tr>
+<tr><td>29</td><td>With Wait What OFF, send <code>Explain how a hash table handles collisions, in about 300 words.</code> and wait for the answer.</td><td>The band has no <code>wait what:</code> row, the weather and cache rows show as before, and no model call is made.</td></tr>
 <tr><td>30</td><td>Type <code>/mods on wait-what</code>.</td><td><code>mod-pack: wait-what is ON.</code></td></tr>
 <tr><td>31</td><td>Send the same prompt as in step 29. Look at the band while Claude works, then after the answer.</td><td>While Claude works: no retell. After the answer ends, a second or more later: a row <code>wait what: ...</code> of 1 or 2 lines, below the cache row (and below the weather row and the <code>next:</code> suggestions, if installed). All of them show.</td></tr>
 <tr><td>32</td><td>Read the retell and the answer.</td><td>The retell says the same thing in plainer words. It has no list marks, no heading, no bold, and at most 2 lines. A retell is a model's summary and can be wrong.</td></tr>
-<tr><td>33</td><td>Send <code>Reply with only the word ok.</code></td><td>No retell for this answer: it is shorter than 200 characters. The row of step 31 is gone from the moment you sent the prompt.</td></tr>
-<tr><td>34</td><td>Repeat step 31. As soon as the answer ends, send any new prompt before the retell shows.</td><td>No retell of the old answer shows later. The late reply is dropped.</td></tr>
-<tr><td>35</td><td>Send the prompt of step 29 and press Esc while Claude is still writing.</td><td>No retell for the interrupted turn.</td></tr>
-<tr><td>36</td><td>Repeat step 31, then make the terminal window shorter, then taller.</td><td>The Wait What row goes from 2 lines to 1 line, then to none, in that order, as the window gets shorter. The weather row goes last. Taller, they come back. The row never overwrites the others.</td></tr>
+<tr><td>33</td><td>Send <code>Reply with only the word ok.</code></td><td>This answer gets no retell, because it is shorter than 200 characters. The row of step 31 is gone from the moment you sent the prompt.</td></tr>
+<tr><td>34</td><td>Repeat step 31. As soon as the answer ends, send any new prompt before the retell shows.</td><td>The old answer gets no retell later, because the late reply is dropped.</td></tr>
+<tr><td>35</td><td>Send the prompt of step 29 and press Esc while Claude is still writing.</td><td>The interrupted turn gets no retell.</td></tr>
+<tr><td>36</td><td>Repeat step 31, then make the terminal window shorter, then taller.</td><td>The Wait What row goes from 2 lines to 1 line, then to none, in that order, as the window gets shorter. The weather row goes last. When the window gets taller, they come back. The Wait What row does not overwrite the others.</td></tr>
 <tr><td>37</td><td>Optional, depends on timing. Repeat step 31, and click <b>compact</b> in the cache row at once when the answer ends, before the retell shows.</td><td>Either a toast <code>Cache Keeper: a Wait What retell is running. Press compact again in a few seconds.</code> (and no compaction), or the compaction runs (the retell had already ended). Both are correct. This warns you that the compaction is a real one.</td></tr>
 <tr><td>38</td><td>Set <code>maxModelCallsPerHour</code> to <code>2</code>. Send the prompt of step 29 three times in a row, waiting for each answer.</td><td>The first two answers are retold. After the third, the band shows one dim line <code>wait-what: hourly limit reached</code> and no retell. The line goes when you send the next prompt.</td></tr>
 <tr><td>39</td><td>Type <code>/clear</code>, then send the prompt of step 29 again, within the hour of step 38.</td><td>The band is empty after <code>/clear</code>. After the answer, the line <code>wait-what: hourly limit reached</code> shows again: <code>/clear</code> does not reset the count.</td></tr>
@@ -163,7 +163,7 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <table>
 <tr><th>Part</th><th>Meaning</th></tr>
 <tr><td>wait what: ...</td><td>The model's retell of the last answer. 1 or 2 lines. A line that does not fit the width ends with <code>…</code>.</td></tr>
-<tr><td>wait-what: hourly limit reached</td><td>The answer was long enough, but the hourly limit refused the call. Nothing was sent. It shows until your next prompt.</td></tr>
+<tr><td>wait-what: hourly limit reached</td><td>The answer was long enough, but the hourly limit refused the call, so nothing was sent. The line shows until your next prompt.</td></tr>
 <tr><td>nothing</td><td>The answer was shorter than 200 characters, or Claude's turn was interrupted, or the call failed, or it is still running. A failed call shows nothing and still counts toward the limit.</td></tr>
 </table>
 <p class="muted">The next prompt, <code>/clear</code> and the end of the session cancel a call that is still running. <code>/mods off wait-what</code> lets a running call end (15 seconds at most) and drops its reply.</p>
@@ -171,43 +171,85 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <h2>7. Test Prompt Queue (steps 42 to 56)</h2>
 <p>Prompt Queue lets you type <code>/q &lt;text&gt;</code> while Claude works, to stack follow-up prompts. They are sent one at a time, each when the turn before it ends. A row above the prompt shows what waits. From this mod on, <code>/mods</code> lists five mods: <code>token-weather</code>, <code>cache-keeper</code>, <code>prompt-queue</code>, <code>wait-what</code> and <code>blast-radius</code>.</p>
 <div class="note warn"><b>Queued prompts run with your permissions, and they send by themselves.</b> When a turn ends, the next queued prompt goes to Claude as if you had typed it at that moment. In steps 42 to 56 queue only harmless prompts, such as <code>Say the word one.</code>. Do not queue a prompt that edits files, runs commands or sends data. In a real session, read the queue (<code>/q</code>) before you walk away from it. The mod itself spends no model tokens: each sent prompt is a normal turn of your session, on your plan. If you interrupt a turn with Esc, the queue pauses and sends nothing until you type <code>/q resume</code>.</div>
-<div class="note"><b>A slow prompt for the steps.</b> Steps 44, 48 and 51 need a turn that lasts about 20 seconds, so you have time to type. Use <code>Use the Bash tool to run exactly: sleep 20</code>. If your Claude Code asks for permission to run it, allow it. The row of the queue is also drawn while Claude works. Cache Keeper's row is not: it shows only after an answer.</div>
+<div class="note"><b>A slow prompt for the steps.</b> Steps 44, 48 and 51 need a turn that lasts about 20 seconds, so you have time to type. Use <code>Use the Bash tool to run exactly: sleep 20</code>. If your Claude Code asks for permission to run it, allow it. The queue row is drawn while Claude works. Cache Keeper's row is drawn only after an answer.</div>
 <table>
 <tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
 <tr><td>42</td><td>Type <code>/mods</code>.</td><td>A line <code>ON  prompt-queue  Prompt Queue: type /q &lt;text&gt; while Claude works ...</code> with no <code>[uses model tokens]</code> flag.</td></tr>
-<tr><td>43</td><td>Type <code>/q</code> with nothing after it.</td><td><code>The prompt queue is empty. Type /q &lt;text&gt; to add a prompt.</code> No row above the prompt.</td></tr>
+<tr><td>43</td><td>Type <code>/q</code> with nothing after it.</td><td><code>The prompt queue is empty. Type /q &lt;text&gt; to add a prompt.</code> The band shows no queue row.</td></tr>
 <tr><td>44</td><td>Send the slow prompt (<code>Use the Bash tool to run exactly: sleep 20</code>). While Claude works, type <code>/q Say the word one.</code>, then <code>/q Say the word two.</code></td><td>Each <code>/q</code> answers at once, while the turn still runs: <code>Queued 1 of 20: "Say the word one.". It sends when the running turn ends.</code>, then <code>Queued 2 of 20</code>. A row appears above the prompt: <code>queue (2): 1 Say the word one. · 2 Say the word two.</code> (cut to your width). If the <code>/q</code> waits until the turn ends instead of answering at once, report it: the command is not running mid-turn.</td></tr>
 <tr><td>45</td><td>Type <code>/q</code>, then <code>/q rm 2</code>, then <code>/q</code> again.</td><td>The first list shows 2 numbered prompts, then <code>Removed 2: "Say the word two.".</code>, then a list of 1. The row shows <code>queue (1): 1 Say the word one.</code>.</td></tr>
-<tr><td>46</td><td>Wait for the slow turn to end.</td><td>The queued prompt is sent by itself, once, not twice. Claude answers <code>one</code>. The row is gone. The declared API says the transcript row names the plugin (mod-pack) as the sender, and that Claude reads the text bare, as if you typed it. Report what you see, in particular if the row does not name the plugin, or if Claude treats the text as a message from a plugin.</td></tr>
+<tr><td>46</td><td>Wait for the slow turn to end.</td><td>The queued prompt is sent by itself, one time. Claude answers <code>one</code>. The queue row is gone. The declared API says the transcript row names the plugin (mod-pack) as the sender, and that Claude reads the text bare, as if you typed it. Report what you see, in particular if the row does not name the plugin, or if Claude treats the text as a message from a plugin.</td></tr>
 <tr><td>47</td><td>Send the slow prompt again. Queue <code>/q Say the word one.</code> and <code>/q Say the word two.</code>. Then type <code>/q clear</code>. Wait for the turn to end.</td><td><code>Cleared 2 queued prompts.</code> The row goes. When the turn ends, nothing is sent.</td></tr>
-<tr><td>48</td><td>Send the slow prompt again. Queue the two prompts of step 47. While Claude works, press Esc to interrupt the turn.</td><td>The turn stops. Nothing is sent. A toast <code>Prompt Queue paused: you interrupted the turn. Type /q resume to send.</code> shows. The row, in yellow: <code>queue paused (2): you interrupted the turn · /q resume sends · /q clear drops</code>.</td></tr>
-<tr><td>49</td><td>Send <code>Say the word ok.</code> and wait for the answer.</td><td>The queue stays paused. Nothing is sent.</td></tr>
+<tr><td>48</td><td>Send the slow prompt again. Queue the two prompts of step 47. While Claude works, press Esc to interrupt the turn.</td><td>The turn stops and nothing is sent. A toast <code>Prompt Queue paused: you interrupted the turn. Type /q resume to send.</code> shows. The row, in yellow: <code>queue paused (2): you interrupted the turn · /q resume sends · /q clear drops</code>.</td></tr>
+<tr><td>49</td><td>Send <code>Say the word ok.</code> and wait for the answer.</td><td>The queue stays paused and sends nothing.</td></tr>
 <tr><td>50</td><td>Type <code>/q resume</code>.</td><td><code>Resumed. Claude is not working, so it sends now: ...</code> The first prompt is sent at once and answered. The second is sent when that turn ends. The row goes after the second is sent.</td></tr>
 <tr><td>51</td><td>Send the slow prompt. Queue <code>/q Say the word one.</code>. Then type <code>/q pause</code>. Wait for the turn to end.</td><td><code>The queue is paused. Type /q resume to send again.</code> When the turn ends, nothing is sent and the row says <code>queue paused (1): paused with /q pause ...</code>. Type <code>/q resume</code>: the prompt is sent at once.</td></tr>
 <tr><td>52</td><td>With no turn running and the queue empty, type <code>/q Say the word now.</code></td><td><code>Queued 1 of 20: "Say the word now.". Claude is not working, so it sends now: ...</code> The prompt is sent at once and answered.</td></tr>
-<tr><td>53</td><td>Optional, depends on timing. Type <code>/compact</code>. While it runs, type <code>/q Say the word ok.</code></td><td>Either <code>A compaction is running, so nothing is sent yet. Type /q resume when it ends.</code> (then, after the compaction, <code>/q resume</code> sends the prompt), or the compaction had already ended and the prompt is sent at once. Both are correct. The queue never sends while a compaction runs.</td></tr>
+<tr><td>53</td><td>Optional, depends on timing. Type <code>/compact</code>. While it runs, type <code>/q Say the word ok.</code></td><td>Either <code>A compaction is running, so nothing is sent yet. Type /q resume when it ends.</code> (then, after the compaction, <code>/q resume</code> sends the prompt), or the compaction had already ended and the prompt is sent at once. Both are correct. The queue sends nothing while a compaction runs.</td></tr>
 <tr><td>54</td><td>Send the slow prompt. Queue one prompt. Type <code>/mods off prompt-queue</code>.</td><td>The row goes at once. <code>/q anything</code> now says <code>prompt-queue is OFF. Nothing is queued and nothing is sent.</code> When the turn ends, nothing is sent. Type <code>/mods on prompt-queue</code>, then <code>/q</code>: the queue is empty (the prompt queued before was dropped when the mod was switched off).</td></tr>
-<tr><td>55</td><td>Send the slow prompt. Queue one prompt. Type <code>/clear</code>.</td><td>The queue is empty after <code>/clear</code> (type <code>/q</code> to check). Nothing is sent.</td></tr>
+<tr><td>55</td><td>Send the slow prompt. Queue one prompt. Type <code>/clear</code>.</td><td>The queue is empty after <code>/clear</code> (type <code>/q</code> to check), and nothing is sent.</td></tr>
 <tr><td>56</td><td>Send the slow prompt. Queue 4 prompts with long texts. Look at the band while Claude works, in a wide terminal and then in a narrow one. After the answer, look again.</td><td>The queue row stays while Claude works and is cut to the width, ending with <code>· …</code> when prompts are left out. After the answer, the Token Weather row, the Cache Keeper row and the queue row show together, in that order, below the <code>next:</code> suggestions if installed. A short terminal shows fewer rows: Token Weather first, then Cache Keeper, then the queue.</td></tr>
 </table>
 <h3>How to read the queue row</h3>
 <table>
 <tr><th>Part</th><th>Meaning</th></tr>
 <tr><td>queue (3): 1 fix tests · 2 update docs · …</td><td>3 prompts wait. Each one is cut to 24 characters. The numbers are what <code>/q rm &lt;n&gt;</code> takes. <code>· …</code> means more prompts follow than the width shows.</td></tr>
-<tr><td>queue paused (3): ...</td><td>Nothing is sent. The reason is shown: you interrupted a turn, a turn ended with an error or a refusal, you typed <code>/q pause</code>, or Claude Code did not accept the last prompt. <code>/q resume</code> sends again, <code>/q clear</code> drops the prompts.</td></tr>
+<tr><td>queue paused (3): ...</td><td>The queue sends nothing, and the row shows the reason: you interrupted a turn, a turn ended with an error or a refusal, you typed <code>/q pause</code>, or Claude Code did not accept the last prompt. <code>/q resume</code> sends again, <code>/q clear</code> drops the prompts.</td></tr>
 <tr><td>nothing</td><td>The queue is empty, or the mod is off.</td></tr>
 </table>
 <p class="muted">The commands: <code>/q &lt;text&gt;</code> adds a prompt (at most 20 prompts, 2000 characters each). <code>/q</code> or <code>/q list</code> lists them. <code>/q rm &lt;n&gt;</code> removes one. <code>/q clear</code> removes all. <code>/q pause</code> and <code>/q resume</code> stop and start the sending. <code>/q add &lt;text&gt;</code> queues a text that starts with a command word. Only these exact forms are commands: <code>/q rm the old files</code> queues that sentence.</p>
 
-<h2>8. What these tests cannot show</h2>
+<h2>8. Test Snake (steps 57 to 77)</h2>
+<p>Snake is a small Snake game in a pane. It pauses when Claude finishes a turn and goes on when you send the next prompt. It draws a pane of its own and takes no row of the band, so the weather, cache and queue rows keep their places. From this mod on, <code>/mods</code> lists six mods: <code>token-weather</code>, <code>cache-keeper</code>, <code>prompt-queue</code>, <code>wait-what</code>, <code>blast-radius</code> and <code>snake</code>. Snake costs no model tokens.</p>
+<div class="note"><b>The keys work while the pane has the keyboard.</b> The keys are <code>w</code> <code>a</code> <code>s</code> <code>d</code> (up, left, down, right), <code>p</code> (play and pause), <code>r</code> (new game) and Esc (close the pane). <code>/snake</code> asks for the keyboard when it opens the pane, and Claude Code grants the request when the prompt box is empty. When the last line of the pane says <code>Keys need the pane focused: click it, or ctrl+x then Tab.</code>, do that first (step 59). A letter that appears in the prompt box shows that the pane does not have the keyboard.</div>
+<div class="note"><b>The terminal must be at least 32 columns wide.</b> The board is 16 cells of 2 columns each, and 8 rows. The pane asks for 13 rows. The snake crosses the board in about 2 seconds. When the snake hits a wall before you finish a step, press <code>r</code> and repeat the step.</div>
+<div class="note"><b>A slow prompt for the steps.</b> Steps 69, 70 and 73 need a turn that lasts about 20 seconds. Use <code>Use the Bash tool to run exactly: sleep 20</code>, as in section 7. The game pauses and resumes by itself at the end and at the start of a turn, so these steps show it.</div>
+<table>
+<tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
+<tr><td>57</td><td>Type <code>/mods</code>.</td><td>A line <code>ON  snake  Snake: type /snake to play Snake in a pane ...</code> without the flags <code>[uses model tokens]</code> and <code>[plays sound]</code>.</td></tr>
+<tr><td>58</td><td>Type <code>/snake</code>.</td><td>The reply <code>Snake opened. Press p to play. The keys w a s d p r work while the pane has the keyboard (click it, or ctrl+x then Tab). Esc or /snake closes it.</code> A pane opens with the line <code>Snake  score 0  best 0</code>, the line <code>PAUSED – press p to play</code>, a board of 8 rows of dim dots with a green snake of 3 cells (yellow head) and a red dot (the food), the key lines <code>w: up a: left s: down d: right</code> and <code>p: play r: restart</code>, and a last line. Report where the pane sits (beside the transcript or above the prompt) and whether the whole board shows.</td></tr>
+<tr><td>59</td><td>When the last line says <code>Keys need the pane focused: click it, or ctrl+x then Tab.</code>, click the pane, or press ctrl+x then Tab.</td><td>The last line says <code>Esc closes the pane.</code> Report which of the two worked, or that the line said <code>Esc closes the pane.</code> from the start.</td></tr>
+<tr><td>60</td><td>Press <code>p</code> and press nothing else.</td><td>The second line says <code>playing</code>, the key line says <code>p: pause</code>, and the snake moves right about 7 cells a second. The prompt box stays empty. About 2 seconds later the snake hits the right wall: the second line says <code>GAME OVER – press r for a new game.</code> in red and the snake stops.</td></tr>
+<tr><td>61</td><td>Press <code>w</code>, <code>a</code>, <code>s</code>, <code>d</code> and <code>p</code>.</td><td>The board and the status stay as they were, because a finished game takes the key <code>r</code> only.</td></tr>
+<tr><td>62</td><td>Press <code>r</code>, then <code>w</code>, then <code>a</code>, about half a second apart.</td><td>A new game starts at once (<code>Snake  score 0  best 0</code>, <code>playing</code>). The snake turns up at the next tick after <code>w</code>, then left after <code>a</code>.</td></tr>
+<tr><td>63</td><td>While the snake heads left, press <code>d</code>.</td><td>The snake keeps heading left. A turn of 180 degrees is dropped.</td></tr>
+<tr><td>64</td><td>Press <code>r</code> and steer the snake onto the red dot. This can take several tries: press <code>r</code> after each game over.</td><td>The score goes up by 1 (<code>Snake  score 1  best 1</code>), the snake is 1 cell longer, and a new red dot appears on a free cell.</td></tr>
+<tr><td>65</td><td>After step 64, let the snake hit a wall. Then press <code>r</code>.</td><td>The line <code>GAME OVER – press r for a new game.</code> and <code>best</code> equal to the highest score so far. After <code>r</code>: a new game, score 0, the same <code>best</code>.</td></tr>
+<tr><td>66</td><td>Press <code>r</code>, then <code>p</code> within a second. Press <code>p</code> again.</td><td>After the first <code>p</code>: <code>PAUSED – press p to play</code>, and the snake stands still. After the second <code>p</code>: <code>playing</code>, and the snake goes on from where it stood.</td></tr>
+<tr><td>67</td><td>Press <code>p</code> to pause. Press Esc. Type <code>/snake</code>.</td><td>Esc closes the pane. The next <code>/snake</code> opens it with the same board, the same score and <code>PAUSED – press p to play</code>. When Esc does not close the pane, report it and close it with <code>/snake</code>.</td></tr>
+<tr><td>68</td><td>With the pane open, type <code>/snake</code>.</td><td>The reply <code>Snake closed. /snake opens it again, with the game where you left it.</code> and the pane closes. Leave it closed for step 69.</td></tr>
+<tr><td>69</td><td>Send the slow prompt (<code>Use the Bash tool to run exactly: sleep 20</code>). While Claude works, type <code>/snake</code>.</td><td>The reply <code>Snake opened. ...</code> comes at once, while the turn still runs. When the <code>/snake</code> waits until the turn ends instead, report it: the command does not run in a running turn.</td></tr>
+<tr><td>70</td><td>Send the slow prompt again. While Claude works, press <code>p</code> and steer to keep the snake on the board (<code>s</code> before the right wall, <code>a</code> before the bottom wall, <code>w</code> before the left wall). Keep going until the turn ends. This needs timing: when the snake dies first, press <code>r</code>, and try again.</td><td>When the turn ends, the game pauses at once: <code>PAUSED – Claude finished</code>, and the snake stands still. It stays still for as long as you wait.</td></tr>
+<tr><td>71</td><td>With the game paused as in step 70, send <code>Say the word ok.</code></td><td>When the turn starts, the second line says <code>playing</code> and the snake goes on from where it stopped, in the same direction. Press a direction key at once when the snake is near a wall. When the turn ends, the game pauses again.</td></tr>
+<tr><td>72</td><td>Press <code>p</code> to play, then <code>p</code> to pause (<code>PAUSED – press p to play</code>). Send <code>Say the word ok.</code></td><td>The game stays <code>PAUSED – press p to play</code> from the start to the end of the turn, and after it. A game that you paused is not resumed by a new turn.</td></tr>
+<tr><td>73</td><td>Optional, depends on timing. Send the slow prompt, type <code>/q Say the word one.</code>, and press <code>p</code> to run the game. Wait for the end of the turn.</td><td>At the end of the slow turn the game pauses (<code>PAUSED – Claude finished</code>), the queue sends the prompt, and the game goes on (<code>playing</code>) a moment later, when that prompt starts its turn.</td></tr>
+<tr><td>74</td><td>Optional, depends on timing. In Git Bash run <code>mkdir -p /tmp/mp-test/victim-b</code>. Send <code>Use the Bash tool to run exactly: rm -rf /tmp/mp-test/victim-b</code> and press <code>p</code> and steer before the Blast Radius dialog opens, so that the game runs when it opens.</td><td>While the dialog is open the pane says <code>PAUSED – a question is open</code>, and the snake stands still. After you choose <b>Cancel</b>, the pane says <code>playing</code> and the snake goes on. When the game was not running as the dialog opened, nothing changes in the pane.</td></tr>
+<tr><td>75</td><td>Type <code>/mods off snake</code>. Type <code>/snake</code>. Type <code>/mods on snake</code>, then <code>/snake</code>.</td><td>After <code>/mods off snake</code> the pane closes at once. <code>/snake</code> answers <code>mod-pack: snake is OFF. Turn it on with /mods on snake.</code> and opens nothing. After <code>/mods on snake</code>, <code>/snake</code> opens the pane again.</td></tr>
+<tr><td>76</td><td>Close the pane. Make the terminal window narrower than 32 columns, when your terminal allows it, and type <code>/snake</code>. Then widen the window to about 40 columns, open the pane and make the window narrower again.</td><td>At under 32 columns: <code>Snake needs a terminal at least 32 columns wide. This one is N.</code> (N is your width) and no pane opens. With the pane open in a narrow window, the pane shows the board, or the line <code>Snake needs a pane 32 columns wide. This one is N. Widen the terminal.</code> Report the widths at which each shows. The game goes on behind that line.</td></tr>
+<tr><td>77</td><td>Open the pane after an answer, so that the weather row and the cache row show. Look at the band above the prompt with the pane open, then close the pane and look again.</td><td>The rows of the band are the same with the pane open and closed: the <code>next:</code> suggestions (if installed), the weather row, the cache row and the queue row (when prompts wait). Snake adds no row to the band. Report how many rows the band keeps with the pane open: the pane takes rows from the screen.</td></tr>
+</table>
+<h3>How to read the Snake pane</h3>
+<table>
+<tr><th>Part</th><th>Meaning</th></tr>
+<tr><td>Snake  score 3  best 12</td><td>The score of this game, then the highest score. The highest score is kept in the plugin store and shows again in the next session.</td></tr>
+<tr><td>playing</td><td>The snake moves, one cell every 150 ms.</td></tr>
+<tr><td>PAUSED – Claude finished</td><td>A turn ended while the game ran. The next turn that starts resumes the game.</td></tr>
+<tr><td>PAUSED – press p to play</td><td>You paused the game, or you opened it and did not start it, or you closed the pane. Press <code>p</code> to play. A new turn does not resume it.</td></tr>
+<tr><td>PAUSED – a question is open</td><td>A Blast Radius dialog is open. The game goes on when it is answered.</td></tr>
+<tr><td>GAME OVER – press r for a new game.</td><td>The snake hit a wall or itself. Press <code>r</code>. When the snake fills the board, the line says <code>YOU WIN</code>.</td></tr>
+<tr><td>● (red)</td><td>Food. Eating it scores 1 and adds 1 cell to the snake. The green cells are the body and the yellow cell is the head.</td></tr>
+</table>
+<p class="muted">The keys: <code>w</code> up, <code>a</code> left, <code>s</code> down, <code>d</code> right, <code>p</code> play and pause, <code>r</code> new game, Esc closes the pane. A turn of 180 degrees is dropped, and at most 2 turns wait for the next tick. Clicking a key label in the pane works as well. All keys are letters.</p>
+
+<h2>9. What these tests cannot show</h2>
 <ul>
-<li><b>Storm and Compact soon colors.</b> A 1M window needs 750k tokens to reach Storm. There is no cheap way to get there in a test.</li>
-<li><b>Sound.</b> It is silent on Windows and Linux. Only macOS plays plugin sound.</li>
+<li><b>Storm and Compact soon colors.</b> A 1M window needs 750k tokens to reach Storm, which costs too much for a test.</li>
+<li><b>Sound.</b> Only macOS plays plugin sound, so Windows and Linux are silent.</li>
 <li><b><code>claude -p</code> behavior.</b> You cannot test the non-interactive path from inside a session. By design, Blast Radius denies risky commands when nothing can ask.</li>
-<li><b>Cache Keeper against the real cache.</b> The row is a countdown of a timer. Nothing here checks whether the real cache is warm, or what lifetime your account has. A model switch can make the cache cold early.</li>
+<li><b>Cache Keeper against the real cache.</b> The row counts down a timer. These steps do not check whether the real cache is warm or what lifetime your account has. A model switch can make the cache cold early.</li>
 <li><b>The compact button by keyboard.</b> Step 21 clicks it. Focusing the band with ctrl+x then Tab and pressing Enter was not checked.</li>
 <li><b>Dialog order.</b> The type documentation says the Blast Radius dialog comes before Claude's own permission prompt. It has not been observed.</li>
-<li><b>What Wait What costs.</b> No call was measured. The size of a retell call is an estimate (about 1,000 tokens in at most, 120 out at most). Check your own usage view after the steps.</li>
+<li><b>What Wait What costs.</b> Nobody measured a call. The size of a retell call is an estimate (about 1,000 tokens in at most, 120 out at most). Check your own usage view after the steps.</li>
 <li><b>That the retell stays out of the transcript.</b> The type declarations say the call has no history and the plugin adds nothing to the conversation. Look at the transcript after step 31: no retell should be in it.</li>
 <li><b>Wait What beside the real next-steps plugin.</b> Both can run after the same answer, each with its own call. Step 31 is the first check of the two together.</li>
 <li><b>The row heights.</b> The terminal heights at which Wait What shows 2 lines, 1 line or none were not measured (step 36).</li>
@@ -216,14 +258,21 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <li><b>Your own prompts and the queue.</b> If you type a normal prompt while Claude works, Claude Code holds it itself. Then both your held prompt and the next queued prompt wait for the end of the turn. The order between them was not checked.</li>
 <li><b>A draft in the prompt box.</b> What happens to text you have typed but not sent when the queue sends a prompt was not checked.</li>
 <li><b>Dialogs.</b> The type declarations give no way to see whether a question dialog is open. A Blast Radius dialog belongs to a tool call inside a turn, so no turn ends while one is open and the queue sends nothing then. A dialog from another plugin that opens between turns could be open when the queue sends. It was not tested.</li>
+<li><b>That <code>/snake</code> runs while a turn runs.</b> The plugin registers it as an <code>immediate</code> command, which the type declarations say runs at once in a running turn. Step 69 is the first real check. If it waits for the turn to end, Snake still works, and you open it between turns.</li>
+<li><b>Where the pane sits and how tall it is.</b> The type declarations say Claude Code docks a pane beside the transcript in the fullscreen terminal from 110 columns, and seats it above the prompt otherwise. The plugin asks for 13 rows, and the declarations say your own size wins. How the pane, the band and the prompt share a short terminal was not measured (steps 58 and 77).</li>
+<li><b>The keyboard.</b> <code>/snake</code> asks for the keyboard, and the declarations say the request is granted only while the prompt is empty. Whether the letters reach the pane, and whether Esc closes it, is the first check in steps 59, 60 and 67.</li>
+<li><b>The look of the board.</b> The glyphs <code>██</code>, <code>●</code> and <code>·</code> are drawn 2 columns to a cell. A font that draws <code>●</code> or <code>·</code> wider than 1 column shifts the board. Nobody has seen the board drawn.</li>
+<li><b>A real Blast Radius dialog open beside the game.</b> The automated test holds a stand-in for the dialog. Step 74 is the first run with the real one. The dialog opens only inside a turn, so the timing in step 74 is yours.</li>
+<li><b>Toasts while Snake is open.</b> The pane is opened without <code>holdToasts</code>, so the cache toast and the queue toast should show. This was not run on a real screen.</li>
+<li><b>The high score across sessions and a hot reload.</b> The high score is read from the plugin store when you open the pane. A reload of the plugin drops the game's timer. The game then waits until the next prompt or key press. The steps run neither.</li>
 </ul>
 
-<h2>9. Undo</h2>
+<h2>10. Undo</h2>
 <pre><code>Remove-Item -Recurse "$w\mod-pack"
 # restore the old mod, if you moved one:
 Move-Item "C:\Users\&lt;you&gt;\.claude\dev-mods-disabled\token-weather-old" "$w\token-weather"</code></pre>
 
-<h2>10. What to report</h2>
+<h2>11. What to report</h2>
 <p>Send the number of any step whose result differs from the expected result. Add a screenshot or the text you see, and any dim line in the transcript that names <code>mod-pack</code>.</p>
 
 <footer>mod-pack 0.1.0 · MIT license · A mod is code that runs with your permissions. Run <code>claude plugin validate</code> on any mod before you install it.</footer>
