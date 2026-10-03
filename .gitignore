@@ -1,0 +1,5 @@
+# The Claude Code engine writes these at every load; do not commit them.
+**/.claude-plugin/types/
+node_modules/
+.impeccable/
+.serena/

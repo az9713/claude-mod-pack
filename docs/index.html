@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Mods and Hooks Compared</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--text:#e2e8f0;--text2:#cbd5e1;--muted:#94a3b8;--a1:#fb923c;--a2:#2dd4bf;--line:#334155}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:920px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:2rem;line-height:1.2;margin:0 0 6px}
+h2{font-size:1.35rem;margin:44px 0 10px;color:var(--a1);border-bottom:1px solid var(--line);padding-bottom:6px}
+h3{font-size:1.05rem;margin:22px 0 6px;color:var(--a2)}
+p{color:var(--text2);margin:10px 0}
+.meta{color:var(--muted);font-size:.9rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:16px 0}
+.card p{margin:6px 0}
+.tbl{overflow-x:auto;margin:16px 0}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:.93rem}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--card);color:var(--a2)}
+td:first-child{color:var(--text);font-weight:600;white-space:nowrap}
+td{color:var(--text2)}
+code,pre{font-family:ui-monospace,Consolas,monospace;font-size:.88rem}
+code{background:var(--card);padding:1px 5px;border-radius:4px;color:var(--text)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;color:var(--text2)}
+pre code{background:none;padding:0}
+ul{color:var(--text2);padding-left:22px}
+li{margin:5px 0}
+.tag{color:var(--a1);font-weight:600}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:700px){.cols{grid-template-columns:1fr}}
+a{color:var(--a2)}
+</style>
+</head>
+<body>
+<main>
+
+<h1>Mods and Hooks Compared</h1>
+<p class="meta">Prepared 2026-10-03 for the reader. Build checked: Claude Code 2.1.288. The mods API is marked "EARLY ACCESS" in its type file and "may change between releases without notice".</p>
+
+<div class="card">
+<p><span class="tag">Short answer.</span> A classic hook (also called a settings hook) is an action that Claude Code runs when an event happens. The action is a shell command, an HTTP request, a model prompt, an MCP tool call or a subagent. It reads JSON and returns JSON or an exit code.</p>
+<p>A mod is a plugin that holds TypeScript functions. Claude Code loads the functions and calls them inside its own process. A mod can do what a classic hook does. A mod can also draw in the interface, keep state, wrap a step with <code>next</code>, and call engine services through <code>$</code>.</p>
+<p>Three differences matter most. (1) A mod can draw; the hooks documentation does not describe any way for a classic hook to draw. (2) A command hook starts a new operating-system process for each event; a mod is loaded once and reloads when you save. (3) A mod sits in the chain of a step and can answer for it or rewrite its input; a classic hook returns a verdict.</p>
+</div>
+
+<h2>1. What a classic hook is</h2>
+<p>You configure it in JSON. The scopes are <code>~/.claude/settings.json</code>, <code>.claude/settings.json</code>, <code>.claude/settings.local.json</code>, a plugin's <code>hooks/hooks.json</code> (or inline in <code>plugin.json</code>), and the <code>hooks:</code> field in a skill or subagent file. The shape is an event name, a matcher, and a list of actions.</p>
+<pre><code>{ "hooks": { "Notification": [
+    { "matcher": "permission_prompt",
+      "hooks": [ { "type": "command", "command": "...", "timeout": 30 } ] } ] } }</code></pre>
+<p>There are five action types. <code>command</code> runs a shell process, sends JSON on stdin, and reads JSON on stdout or an exit code. <code>http</code> posts the JSON to a URL. <code>mcp_tool</code> calls an MCP tool. <code>prompt</code> makes one model call and returns <code>{"ok": true/false, "reason": "..."}</code>. <code>agent</code> (experimental) runs a multi-turn subagent.</p>
+<p>For a command hook, exit code 0 continues, exit code 2 blocks with the reason on stderr, and any other code is a non-blocking error. Default timeouts: 10 minutes for <code>command</code>, <code>http</code> and <code>mcp_tool</code> (30 seconds for <code>UserPromptSubmit</code>, 10 seconds for <code>MessageDisplay</code>); 30 seconds for <code>prompt</code>; 60 seconds for <code>agent</code>; 1.5 seconds in total for <code>SessionEnd</code>.</p>
+<p>The type file lists 33 classic events: <code>ConfigChange</code>, <code>CwdChanged</code>, <code>DirectoryAdded</code>, <code>Elicitation</code>, <code>ElicitationResult</code>, <code>FileChanged</code>, <code>InstructionsLoaded</code>, <code>MessageDisplay</code>, <code>Notification</code>, <code>PermissionDenied</code>, <code>PermissionRequest</code>, <code>PostCompact</code>, <code>PostModelSwitch</code>, <code>PostToolBatch</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, <code>PreCompact</code>, <code>PreModelSwitch</code>, <code>PreToolUse</code>, <code>SessionEnd</code>, <code>SessionStart</code>, <code>Setup</code>, <code>Stop</code>, <code>StopFailure</code>, <code>SubagentStart</code>, <code>SubagentStop</code>, <code>TaskCompleted</code>, <code>TaskCreated</code>, <code>TeammateIdle</code>, <code>UserPromptExpansion</code>, <code>UserPromptSubmit</code>, <code>WorktreeCreate</code>, <code>WorktreeRemove</code>.</p>
+<p>A hook controls behaviour through its output. <code>PreToolUse</code> returns <code>permissionDecision</code> of <code>allow</code>, <code>deny</code>, <code>ask</code> or <code>defer</code>, and may rewrite the tool arguments with <code>updatedInput</code> (the order is not defined when several hooks rewrite the same input). <code>Stop</code> and <code>PostToolUse</code> return <code>decision: "block"</code> with a reason. <code>UserPromptSubmit</code> can add text to the context with <code>additionalContext</code> (maximum 10,000 characters) or block the prompt.</p>
+<p>Limits stated in the documentation: a <code>PostToolUse</code> hook cannot undo a tool that has finished. <code>Stop</code> fires each time Claude finishes, not on a user interrupt. A command hook keeps no state between events except in files. A <code>PreToolUse</code> hook runs in every permission mode, so a <code>deny</code> blocks even under <code>--dangerously-skip-permissions</code>; an <code>allow</code> cannot override a deny rule in settings.</p>
+
+<h2>2. What a mod is</h2>
+<p>A mod is a plugin of function hooks. It has three files: <code>.claude-plugin/plugin.json</code> (name, version, description, optional <code>userConfig</code>), <code>hooks/hooks.json</code> (<code>{ "modules": ["./register.tsx"] }</code>), and one TypeScript or JavaScript module that exports <code>register(on, options)</code>. The module is an ES module with no <code>require</code> and no <code>import()</code>.</p>
+<p>Inside <code>register</code>, <code>on(event, matcher?, hook)</code> adds a hook. Every hook has the form <code>($, e, next)</code>:</p>
+<ul>
+<li><code>$</code> is the engine interface. Its nouns are <code>plugin</code>, <code>ui</code>, <code>model</code>, <code>audio</code>, <code>mcp</code>, <code>session</code>, <code>turn</code>, <code>prompt</code>, <code>tool</code>, <code>command</code>, <code>config</code>, <code>telemetry</code>, <code>agent</code>, <code>fs</code>, <code>store</code>, <code>state</code>, <code>clock</code>, <code>http</code>, <code>process</code>, <code>settings</code> and <code>env</code>.</li>
+<li><code>e</code> is the event input. It is frozen to every depth.</li>
+<li><code>next(e)</code> runs the plugins below this one and then the engine's own behaviour, and resolves to the event result. A hook that returns without calling <code>next</code> answers for itself. <code>next({ ...e, x })</code> rewrites what the rest of the chain sees. Calling <code>next()</code> with no argument rejects.</li>
+</ul>
+<p>The module runs in an environment of its own, with no DOM and no Node. Everything outside it goes through <code>$</code>. The field guide states that a mod runs in Claude Code's own process, needs no Node.js, bundler or build step, and "runs with your permissions" without a sandbox. My reading of the two statements together: the isolated environment limits which APIs the code can see, and <code>$.fs</code>, <code>$.process</code> and <code>$.http</code> then act with your permissions.</p>
+<p>Events include <code>tool.call</code>, <code>tool.check</code>, <code>tool.describe</code>, <code>prompt.submit</code>, <code>prompt.compose</code> (system prompt sections), <code>command.run</code>, <code>ui.render</code>, <code>session.start</code>, <code>session.end</code>, <code>turn.start</code>, <code>turn.step</code> (streaming), <code>turn.complete</code>, and every <code>$</code> call (for example <code>fs.*</code>, <code>store.*</code>, <code>model.*</code>). The classic events are also hookable as <code>classic.&lt;Event&gt;</code>, where <code>e</code> is what the settings hook would receive on stdin.</p>
+<h3>What a mod can draw</h3>
+<p><code>ui.render</code> draws these components: <code>AskUserQuestion</code>, <code>UserMessage</code>, <code>AssistantMessage</code>, <code>ToolUse</code>, <code>ToolResult</code>, <code>ToolGroup</code>, <code>CommandOutput</code>, <code>ToolProgress</code>, <code>Spinner</code>, <code>TurnDuration</code>, <code>InfoNotice</code>, <code>SessionMode</code>, <code>PromptHint</code>, <code>AbovePrompt</code> and <code>Pane</code>. <code>AbovePrompt</code> is the band above the prompt; the engine draws nothing there. <code>$.ui.open</code> opens a <code>Pane</code>. <code>$.ui.toast</code> shows a box in the top right corner (4,000 ms by default). <code>$.ui.status</code> pins one line per plugin under the prompt. The surfaces are <code>terminal</code>, <code>desktop</code>, <code>vscode</code> and <code>mobile</code>; <code>Raster</code> and <code>Image</code> elements exist on the terminal only.</p>
+<h3>State, config and development</h3>
+<p><code>$.state</code> holds session values on the host; they survive a reload and are not written to disk. <code>$.store</code> is JSON on disk and survives sessions (limit 4 MiB). <code>userConfig</code> values come from <code>pluginConfigs</code> in <code>settings.json</code>, and each non-secret field is a row in the <code>/config</code> menu. <code>claude --plugin-dir &lt;folder&gt;</code> loads a mod for one session, and saving a file reloads the module. <code>claude plugin validate &lt;dir&gt;</code> checks it; <code>claude plugin test &lt;folder&gt;</code> runs <code>*.test.ts</code> files.</p>
+
+<h2>3. Side by side</h2>
+<div class="tbl"><table>
+<tr><th></th><th>Classic hook</th><th>Mod</th></tr>
+<tr><td>What it is</td><td>Shell command, HTTP request, model prompt, MCP call or subagent, run on an event</td><td>Functions in a plugin, called in Claude Code's own process</td></tr>
+<tr><td>Language</td><td>Any program you can launch</td><td>TypeScript or JavaScript, no build step</td></tr>
+<tr><td>Run model</td><td>New OS process for each event (command type); no state except files</td><td>Loaded once; reloads on save; <code>$.state</code> and <code>$.store</code> keep values</td></tr>
+<tr><td>Events</td><td>33 named events</td><td>The 33 as <code>classic.&lt;Event&gt;</code>, plus engine events such as <code>tool.call</code>, <code>tool.check</code>, <code>prompt.compose</code>, <code>ui.render</code>, <code>turn.step</code>, and every <code>$</code> call</td></tr>
+<tr><td>Draw in the interface</td><td>Not documented as possible</td><td>Yes: band, pane, toast, status line, dialog (<code>$.ui.ask</code>)</td></tr>
+<tr><td>Change a tool call</td><td>Allow, deny, ask, defer; rewrite arguments with <code>updatedInput</code></td><td>Deny, answer for the call, or rewrite with <code>next({ ...e })</code>; <code>tool.check</code> can return a decision</td></tr>
+<tr><td>Change the prompt</td><td>Add text with <code>additionalContext</code>; block</td><td>Rewrite with <code>prompt.submit</code>; add, replace or drop system prompt sections with <code>prompt.compose</code></td></tr>
+<tr><td>Time limit</td><td>10 minutes default for command (30 s for <code>UserPromptSubmit</code>)</td><td>10,000 ms for a hook; 1,000 ms for a <code>.catch</code> handler; waits on <code>next</code> and <code>$</code> calls are not counted, <code>$.clock.sleep</code> is</td></tr>
+<tr><td>On failure</td><td>Exit code 2 blocks; other non-zero is a non-blocking error</td><td>A failed or timed-out hook is skipped, so a guard fails open unless it has a <code>.catch</code> that answers</td></tr>
+<tr><td>Usage cost</td><td>None for command, http and mcp_tool; <code>prompt</code> and <code>agent</code> types call a model</td><td>None unless the mod calls a model or submits a prompt (field guide)</td></tr>
+<tr><td>Where it works</td><td>Not verified for each surface</td><td>Draws on terminal and desktop; VS Code chat panel, <code>claude -p</code> and mobile run hooks but draw nothing (field guide); <code>$.process</code> is CLI only</td></tr>
+<tr><td>Maturity</td><td>Documented at code.claude.com</td><td>API marked early access; may change between releases</td></tr>
+</table></div>
+
+<h2>4. Two real examples from this machine</h2>
+<div class="cols">
+<div class="card">
+<h3>Classic hook</h3>
+<p><code>~/.claude/settings.json:44-54</code>, shortened. Event <code>Notification</code>, matcher <code>permission_prompt</code>.</p>
+<pre><code>"type": "command",
+"command": "powershell.exe -NoProfile
+  -ExecutionPolicy Bypass
+  -File \"...\\notify-permission.ps1\""</code></pre>
+<p>It starts a separate process. It has no <code>$</code>, no <code>next</code> and no way to draw. Other hook events in the same file: <code>Stop</code> (async), <code>UserPromptSubmit</code>, <code>SessionEnd</code>, <code>SessionStart</code>; <code>PreToolUse</code> is an empty list.</p>
+</div>
+<div class="card">
+<h3>Mod hook</h3>
+<p><code>mod-pack/hooks/register.tsx:752-753</code>, shortened.</p>
+<pre><code>on('tool.call', { tool: 'Bash' },
+  ($, e, next) =&gt;
+    guardShell($, options, e.command,
+      () =&gt; next(e)))
+  .catch(($, e, next) =&gt; ...)</code></pre>
+<p><code>guardShell</code> reads <code>$.session.cwd()</code>, runs read-only git through <code>$.process.run</code>, and calls <code>$.ui.ask</code> for a Proceed or Cancel dialog. It calls <code>next(e)</code> only after Proceed; otherwise it returns <code>{ deny }</code>. The <code>.catch</code> runs if the guard crashes or times out.</p>
+</div>
+</div>
+<p>A second mod hook in the same file (<code>register.tsx:759-792</code>) hooks <code>ui.render</code> for <code>AbovePrompt</code>. It calls <code>const below = await next(e)</code>, then returns a <code>Box</code> that holds <code>{below}</code> plus one row per feature. Keeping <code>below</code> is what stops two mods from overwriting each other's display. This is the fix recorded for <code>token-weather</code>, which first hid <code>next-steps</code>.</p>
+
+<h2>5. What <code>mod-pack</code> implements today</h2>
+<p>The six features, in <code>FEATURES</code> at <code>register.tsx:36</code>: Token Weather (on by default; band row; thunder sound if sound is on), Cache Keeper (on; countdown with a compact button; no model tokens), Prompt Queue (on; <code>/q</code>), Wait What (<b>off</b> by default; the only feature that spends model tokens), Blast Radius (on; dialog only, draws no row), Snake (on; a pane). Slash commands registered at <code>session.start</code>: <code>/mods</code>, <code>/q</code>, <code>/snake</code>. <code>/mods</code> switches features and sound on or off. Features are plain objects of pure functions that never receive <code>$</code>; only <code>register.tsx</code> calls the engine.</p>
+
+<h2>6. How they connect</h2>
+<p>A mod does not replace the classic hooks. It can listen to them. <code>classic.PreToolUse</code> shares the envelope of <code>tool.call</code>. The type file says each classic event fires wherever the engine runs the classic hook, whether or not any settings hook is configured.</p>
+<p>Order for a tool call, from the type file: managed-settings hooks run first and their deny is the call's result. Then <code>tool.call</code> and <code>PreToolUse</code> hooks run. Then <code>tool.check</code> fires, and <code>next(e)</code> in it resolves to the engine's verdict (rules, mode, the tool's own check, the <code>PreToolUse</code> decision). A <code>tool.check</code> hook can return any <code>{ decision }</code> of <code>allow</code>, <code>ask</code> or <code>deny</code>.</p>
+
+<h2>7. When to use which (my recommendation)</h2>
+<ul>
+<li><b>Use a classic hook</b> when the job is "run this program on that event": a desktop notification, a log line, a formatter after an edit, a simple allow or deny rule. It works in any language and needs no loaded code.</li>
+<li><b>Use a mod</b> when the job needs the interface (band, pane, toast, dialog), values kept across events, a wrapper around a step (for example ask, then continue), or a change to the system prompt.</li>
+<li><b>Use both</b> when a mod needs to react to a settings-hook event: hook <code>classic.&lt;Event&gt;</code> inside the mod.</li>
+</ul>
+
+<h2>8. Limits and gotchas</h2>
+<ul>
+<li><b>Sound.</b> <code>$.audio.play</code> uses <code>afplay</code> on macOS. A Linux or Windows terminal plays nothing. This machine runs Windows 11, so mod sound does nothing here by the stated rules. <code>/mods sound on</code> reports the same limit.</li>
+<li><b>Panes.</b> A pane opened without a user action waits undrawn below 144 columns (110 for an id the user opened before). A pane opened by a command or button seats at any width.</li>
+<li><b>Band size.</b> Size panes and bands to <code>e.props.bodyColumns</code>, not to <code>viewport.columns</code>. The <code>AbovePrompt</code> band is capped at half the terminal rows, prompt included. A height change alone does not redraw.</li>
+<li><b>Invalid tree.</b> The engine draws its own component and logs <code>ui.render (&lt;Component&gt;): a hook returned a tree that does not validate</code>.</li>
+<li><b>JSX.</b> In a <code>.tsx</code> hooks file a variable named <code>h</code> hides the JSX factory and gives <code>h is not a function</code>.</li>
+<li><b>Registration timing.</b> <code>$.tool.register</code> rejects until the session binds, so call it from <code>session.start</code>. A command name equal to a built-in name is refused.</li>
+<li><b>Trust.</b> A mod is code that runs with your permissions. Read a mod before you install it.</li>
+</ul>
+
+<h2>9. Open items and corrections</h2>
+<ul>
+<li><b>Correction.</b> One research agent counted 23 classic events and listed 33 names. The type file has 33 <code>hook_event_name</code> values. This report uses 33.</li>
+<li><b>Not verified.</b> Whether a mod's <code>tool.check</code> decision overrides a deny from a user-level settings hook. The type file says managed-settings hooks run first and their deny is the call's result; it does not state the case for user-level hooks.</li>
+<li><b>Not verified.</b> That classic hooks cannot draw. The hooks documentation does not describe drawing; it does not state a prohibition either. The field guide states that a settings hook cannot draw.</li>
+<li><b>Not verified.</b> Which surfaces run classic hooks.</li>
+<li><b>Not verified.</b> The field guide's cache lifetime figures and community star counts. The <code>mod-pack</code> README states that no person has yet watched it in a real terminal.</li>
+<li><b>Gap.</b> There is no <code>cc4_mod.txt</code> in the folder. The reason is unknown.</li>
+</ul>
+
+<h2>10. Sources</h2>
+<ul>
+<li>Hooks documentation: <a href="https://code.claude.com/docs/en/hooks-guide.md">code.claude.com/docs/en/hooks-guide.md</a> and <a href="https://code.claude.com/docs/en/hooks.md">hooks.md</a>.</li>
+<li>Mods documentation, from <code>README.txt</code>: <code>code.claude.com/docs/en/plugins/mods/overview</code> and <code>.../mods/create</code>. Not fetched in this session.</li>
+<li>Mods API: <code>reference.md</code> and <code>types/claude-code.d.ts</code> of the <code>plugin-authoring</code> skill (Claude Code 2.1.288). The d.ts lines read directly for this report: 1060-1087, 3738-3753, 12084-12101.</li>
+<li>Local: <code>claude-mods-field-guide.html</code> (section 1), <code>mod-pack/hooks/register.tsx</code>, <code>mod-pack/hooks/feature.ts</code>, and the <code>hooks</code> section of <code>~/.claude/settings.json</code>. The line references in section 4 and 5 come from the local-material research agent and were not re-read by me.</li>
+</ul>
+
+</main>
+</body>
+</html>
