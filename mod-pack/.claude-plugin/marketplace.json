@@ -1,0 +1,12 @@
+{
+  "name": "mod-pack",
+  "description": "A pack of small Claude Code mods that share the band above the prompt.",
+  "owner": { "name": "az9713" },
+  "plugins": [
+    {
+      "name": "mod-pack",
+      "source": "./",
+      "description": "Small Claude Code mods that share the band above the prompt. Turn each one on or off with /mods."
+    }
+  ]
+}

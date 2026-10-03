@@ -1,0 +1,25 @@
+{
+  "name": "mod-pack",
+  "version": "0.1.0",
+  "description": "A pack of small Claude Code mods that share the band above the prompt without overwriting each other. Turn each one on or off with /mods.",
+  "author": { "name": "az9713" },
+  "license": "MIT",
+  "keywords": ["mods", "function-hooks", "ui", "context-window"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "tokenWeather": {
+      "type": "boolean",
+      "title": "Token Weather",
+      "description": "Show the context-window forecast above the prompt.",
+      "required": false,
+      "default": true
+    },
+    "sound": {
+      "type": "boolean",
+      "title": "Sound",
+      "description": "Let features that can play a sound do so. Off by default. Claude Code plays plugin sound only where it has a player (macOS).",
+      "required": false,
+      "default": false
+    }
+  }
+}
