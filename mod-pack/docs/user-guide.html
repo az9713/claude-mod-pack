@@ -35,8 +35,8 @@ footer{margin-top:48px;border-top:1px solid var(--line);padding-top:14px;font-si
 <body>
 <header><div class="wrap">
 <h1>mod-pack <span>User Guide</span>: Test Steps</h1>
-<p>How to load <code>mod-pack</code> into a running Claude Code session and test its two mods, Token Weather and Blast Radius, in 14 steps. You do not need to exit the session.</p>
-<p class="muted">Version 0.1.0. Written 2026-10-02. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 14 below are the first on-screen check.</p>
+<p>How to load <code>mod-pack</code> into a running Claude Code session and test its three mods, Token Weather, Blast Radius and Cache Keeper, in 27 steps. You do not need to exit the session.</p>
+<p class="muted">Version 0.1.0. Written 2026-10-02. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 27 below are the first on-screen check.</p>
 </div></header>
 <div class="wrap">
 
@@ -108,20 +108,52 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 </ul>
 <p>It does not hold <code>rm file</code>, <code>rm -f file</code>, <code>git clean -n</code>, or plain <code>git push</code>. It is a safety net, not a permission system. Aliases, scripts that call <code>rm</code>, commands built from variables, <code>find -delete</code>, <code>dd</code> and redirects get past it.</p>
 
-<h2>5. What these tests cannot show</h2>
+<h2>5. Test Cache Keeper (steps 15 to 27)</h2>
+<p>Cache Keeper counts down how long the prompt cache stays warm after Claude's last response. From this mod on, <code>/mods</code> (steps 2 and 4) lists three mods: <code>token-weather</code>, <code>cache-keeper</code> and <code>blast-radius</code>.</p>
+<div class="note"><b>The lifetime is a setting.</b> The default is 60 minutes, the documented lifetime on a Claude subscription within plan usage. On an API key, a cloud provider or usage credits it is 5 minutes, so set <code>cacheTtlMinutes</code> to 5 there. To get through the steps quickly, set it to <code>2</code> (steps 18 and 19) and set it back to <code>60</code> at the end. Put it in <code>~/.claude/settings.json</code> under <code>pluginConfigs</code> &rarr; <code>mod-pack</code> &rarr; <code>options</code> &rarr; <code>cacheTtlMinutes</code>, or use its row, "Cache lifetime (minutes)", in <code>/config</code>. The type declarations name the settings path. They say a change reloads the module. The <code>/config</code> row was not checked.</div>
+<div class="note warn"><b>The compact button runs a real compaction.</b> It does the same as <code>/compact</code> and spends model tokens. Test it in a session you can afford to compact.</div>
+<table>
+<tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
+<tr><td>15</td><td>Type <code>/mods</code>.</td><td>A line <code>ON  cache-keeper  Cache Keeper: countdown of how long the prompt cache stays warm ...</code> with no <code>[uses model tokens]</code> flag.</td></tr>
+<tr><td>16</td><td>Send any prompt. Look at the band while Claude works, then after the answer.</td><td>While Claude works: no cache row. After the answer: a row such as <code>⏱ cache warm 60m left · 160k tokens [ compact ]</code>, below the weather row (and below the <code>next:</code> suggestions, if installed). All of them show.</td></tr>
+<tr><td>17</td><td>Compare the tokens in the cache row with the weather row.</td><td>Both show the same context size.</td></tr>
+<tr><td>18</td><td>Set <code>cacheTtlMinutes</code> to <code>2</code>. Send a prompt and wait for the answer. Wait 2 minutes. The row redraws once a minute.</td><td>First <code>⏱ cache cools in 2m</code> in yellow, then <code>⏱ cache cold: next prompt re-reads 160k tokens uncached</code> in red. No dollar amount. No toast (a 2 minute lifetime has no warm part).</td></tr>
+<tr><td>19</td><td>Set <code>cacheTtlMinutes</code> to <code>7</code>. Send a prompt. Wait about 3 minutes.</td><td>The row is warm for the first 2 minutes, then <code>cools in</code> with the minutes left. One toast, <code>Prompt cache cools in ...</code>, shows when the cache enters its last 5 minutes, up to 1 minute late. It does not show again for this answer.</td></tr>
+<tr><td>20</td><td>Send another prompt after the cache went cold.</td><td>No row while Claude works. After the answer the countdown starts again from the full lifetime.</td></tr>
+<tr><td>21</td><td>After an answer, click <b>compact</b> in the cache row.</td><td>The row says <code>⏱ compacting…</code> with no button. When the compaction ends the cache row is gone. The transcript shows a compaction.</td></tr>
+<tr><td>22</td><td>Send a prompt after the compaction.</td><td>The cache row comes back after the answer, with a smaller token count.</td></tr>
+<tr><td>23</td><td>Type <code>/compact</code> yourself, with the cache row showing.</td><td>The row says <code>⏱ compacting…</code> while it runs, then goes until the next answer.</td></tr>
+<tr><td>24</td><td>Type <code>/clear</code>.</td><td>The cache row is gone until the next answer.</td></tr>
+<tr><td>25</td><td>After an answer, type <code>/mods off cache-keeper</code>.</td><td>The cache row disappears at once. No toast comes later. The weather row and other plugins' output stay.</td></tr>
+<tr><td>26</td><td>Type <code>/mods on cache-keeper</code>.</td><td>The row returns, counting from the last answer.</td></tr>
+<tr><td>27</td><td>Set <code>cacheTtlMinutes</code> back to <code>60</code> (or <code>5</code> on an API key).</td><td>The row counts that lifetime again after the next answer.</td></tr>
+</table>
+<h3>How to read the cache row</h3>
+<table>
+<tr><th>Part</th><th>Meaning</th></tr>
+<tr><td>cache warm 43m left</td><td>The next prompt, if sent now, re-reads the conversation from the cache. 43 minutes is what is left of the lifetime you set.</td></tr>
+<tr><td>cache cools in 4m</td><td>5 minutes or less are left. Send a prompt (it refreshes the timer), or compact.</td></tr>
+<tr><td>cache cold</td><td>The lifetime is over. The next prompt processes the whole conversation again, uncached. The number is the context size after the last answer.</td></tr>
+<tr><td>[ compact ]</td><td>Compacts the conversation, like <code>/compact</code>. It has no hotkey. While any compaction runs it is replaced by <code>compacting…</code>.</td></tr>
+</table>
+<p class="muted">The countdown starts when the answer ends. Anthropic counts the lifetime from the start of the last request, so the row can show a little more time than is left. A model switch or a changed tool list can make the cache cold early, and the row does not see that.</p>
+
+<h2>6. What these tests cannot show</h2>
 <ul>
 <li><b>Storm and Compact soon colors.</b> A 1M window needs 750k tokens to reach Storm. There is no cheap way to get there in a test.</li>
 <li><b>Sound.</b> It is silent on Windows and Linux. Only macOS plays plugin sound.</li>
 <li><b><code>claude -p</code> behavior.</b> You cannot test the non-interactive path from inside a session. By design, Blast Radius denies risky commands when nothing can ask.</li>
+<li><b>Cache Keeper against the real cache.</b> The row is a countdown of a timer. Nothing here checks whether the real cache is warm, or what lifetime your account has. A model switch can make the cache cold early.</li>
+<li><b>The compact button by keyboard.</b> Step 21 clicks it. Focusing the band with ctrl+x then Tab and pressing Enter was not checked.</li>
 <li><b>Dialog order.</b> The type documentation says the Blast Radius dialog comes before Claude's own permission prompt. It has not been observed.</li>
 </ul>
 
-<h2>6. Undo</h2>
+<h2>7. Undo</h2>
 <pre><code>Remove-Item -Recurse "$w\mod-pack"
 # restore the old mod, if you moved one:
 Move-Item "C:\Users\&lt;you&gt;\.claude\dev-mods-disabled\token-weather-old" "$w\token-weather"</code></pre>
 
-<h2>7. What to report</h2>
+<h2>8. What to report</h2>
 <p>Send the number of any step whose result differs from the expected result. Add a screenshot or the text you see, and any dim line in the transcript that names <code>mod-pack</code>.</p>
 
 <footer>mod-pack 0.1.0 · MIT license · A mod is code that runs with your permissions. Run <code>claude plugin validate</code> on any mod before you install it.</footer>

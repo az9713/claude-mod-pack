@@ -10,7 +10,7 @@
 // The dispatcher calls a callback only while the feature is ON, and an error
 // in one feature never reaches another.
 
-import type { Elements, RenderElement, RenderPropsOf, SessionContextUsage, SessionStartInput, TurnCompleteInput, TurnStartInput } from 'claude-code'
+import type { Elements, PluginOptions, RenderElement, RenderPropsOf, SessionContextUsage, SessionEndInput, SessionStartInput, TurnCompleteInput, TurnStartInput } from 'claude-code'
 
 // The terminal's element table: Box, Text, Button, ...
 export type Terminal = Elements['terminal']
@@ -20,6 +20,10 @@ export type FeatureContext = {
   // True only when ALL of these hold: the global `sound` setting is ON, this
   // feature is ON, and this feature declares `hasSound`.
   isSoundAllowed: boolean
+  // The engine's clock at the moment of the call, in ms. NaN when it could not be read.
+  now: number
+  // The plugin's settings (userConfig). A mod reads its own number settings here.
+  options: PluginOptions
 }
 
 // What a callback returns. Both fields are optional; returning nothing changes nothing.
@@ -30,6 +34,8 @@ export type Step<S> = {
   // A sound file of this plugin, relative to the plugin folder ('assets/x.wav').
   // The dispatcher plays it only when `isSoundAllowed` is true.
   sound?: string
+  // A line for `$.ui.toast`. The dispatcher shows it.
+  toast?: string
 }
 
 export type Feature<S = unknown> = {
@@ -51,13 +57,26 @@ export type Feature<S = unknown> = {
   turnComplete?: (state: S | undefined, input: { e: TurnCompleteInput; context: SessionContextUsage | undefined }, ctx: FeatureContext) => Step<S> | undefined
   turnStart?: (state: S | undefined, input: { e: TurnStartInput }, ctx: FeatureContext) => Step<S> | undefined
   sessionStart?: (state: S | undefined, input: { e: SessionStartInput }, ctx: FeatureContext) => Step<S> | undefined
+  // The session ends: exit, or /clear (which raises no `session.start` after it).
+  sessionEnd?: (state: S | undefined, input: { e: SessionEndInput }, ctx: FeatureContext) => Step<S> | undefined
+  // The main conversation was compacted (by the person, by the engine, or by a mod).
+  compacted?: (state: S | undefined, ctx: FeatureContext) => Step<S> | undefined
+  // Once a minute while a feature with a `tick` is ON. The dispatcher redraws the band after it.
+  tick?: (state: S | undefined, ctx: FeatureContext) => Step<S> | undefined
 
   // One row for the band above the prompt, or null to draw nothing now.
   // The compositor clips the row to one terminal row and counts it as one row
   // against its budget. `el` is the terminal's element table.
   // Never bind a digit hotkey here (see README, "How mods share the band").
-  band?: (state: S | undefined, e: { props: RenderPropsOf['AbovePrompt'] }, el: Terminal) => RenderElement | null
+  // `e.now` is the clock (NaN when unreadable) and `e.isCompacting` is the shared
+  // automation lock. `actions` are plain callbacks the dispatcher built, for a Button's `onPress`.
+  band?: (state: S | undefined, e: BandInput, el: Terminal, actions: BandActions) => RenderElement | null
 }
+
+export type BandInput = { props: RenderPropsOf['AbovePrompt']; now: number; options: PluginOptions; isCompacting: boolean }
+
+// What a band row may trigger. Each one is fire-and-forget: it returns at once.
+export type BandActions = { compact: () => void }
 
 // Types the feature's state `S`, then stores it with the state erased, so that
 // FEATURES can hold features of different state types in one list.

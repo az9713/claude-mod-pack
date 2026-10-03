@@ -4,8 +4,12 @@
 
 export type ModPackSample = { tokens: number; window: number }
 
+// Cache Keeper: when the last main-conversation response came, and what it left in the context.
+export type ModPackCacheClock = { at?: number; tokens?: number; isWorking?: boolean; isWarned?: boolean }
+
 export type ModPackFeatureStates = {
   'token-weather'?: ModPackSample[]
+  'cache-keeper'?: ModPackCacheClock
 }
 
 declare module 'claude-code' {

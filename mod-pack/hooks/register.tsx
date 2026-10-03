@@ -16,6 +16,7 @@ import {
   previewStash, previewStatus, PROCEED, pushPlan, resolvePath, STEP_TIMEOUT_MS,
 } from './blast-radius'
 import type { GitOut, PathFact, Risk } from './blast-radius'
+import { cacheKeeper } from './cache-keeper'
 import type { Feature, FeatureContext, Step } from './feature'
 import { runMods } from './mods-command'
 import { isFeatureOn, isSoundAllowed, isSoundOn, parseOverrides, rowBudget, STORE_KEY } from './settings'
@@ -23,7 +24,7 @@ import { tokenWeather } from './token-weather'
 import type { ModPackFeatureStates } from '../types'
 
 // The order is the row order in the band. Blast Radius draws no row.
-const FEATURES: readonly Feature[] = [tokenWeather, blastRadius]
+const FEATURES: readonly Feature[] = [tokenWeather, cacheKeeper, blastRadius]
 
 // Every feature's state, by feature id.
 const featureStates = atom({ plugin: 'mod-pack', key: 'features' } as const, {} as ModPackFeatureStates)
@@ -35,14 +36,15 @@ type Active = { feature: Feature; ctx: FeatureContext }[]
 async function active($: EngineInterface, options: PluginOptions): Promise<Active> {
   const overrides = parseOverrides(await $.store.get(STORE_KEY))
   const isGlobalSoundOn = isSoundOn(overrides, options)
+  const now = await $.clock.now().catch(() => NaN)
   return FEATURES.filter(f => isFeatureOn(f, overrides, options)).map(feature => ({
     feature,
-    ctx: { isSoundAllowed: isSoundAllowed(feature, true, isGlobalSoundOn) },
+    ctx: { isSoundAllowed: isSoundAllowed(feature, true, isGlobalSoundOn), now, options },
   }))
 }
 
-// Runs `call` on each feature that is ON, keeps the state it returns, plays the
-// sound it asks for when sound is allowed. One feature failing never stops the others.
+// Runs `call` on each feature that is ON, keeps the state it returns, shows the toast
+// it asks for, plays the sound it asks for when sound is allowed. One feature failing never stops the others.
 async function dispatch($: EngineInterface, options: PluginOptions, call: (feature: Feature, state: unknown, ctx: FeatureContext) => Step<unknown> | undefined) {
   for (const { feature, ctx } of await active($, options)) {
     try {
@@ -52,10 +54,75 @@ async function dispatch($: EngineInterface, options: PluginOptions, call: (featu
         const state = step.state
         await update($, featureStates, all => ({ ...all, [feature.id]: state }))
       }
+      if (step?.toast) $.ui.toast(step.toast)
       if (step?.sound && ctx.isSoundAllowed) void $.audio.play({ asset: step.sound }).catch(() => undefined)
     } catch (error) {
       $.ui.log(`mod-pack: ${feature.id} failed: ${String(error)}`)
     }
+  }
+}
+
+// ---- The shared automation lock ----------------------------------------------------
+// Only ONE automatic action runs at a time: a compaction, and (later mods) an automatic
+// prompt submission. `busyWith` names the holder, or is undefined when free. It is plain
+// module state on purpose: a hot reload drops it together with the running work and the
+// timers, so it cannot stay set. A mod that sends prompts by itself must check it first.
+let busyWith: 'compaction' | undefined
+
+// ---- The minute timer ---------------------------------------------------------------
+// Features with a `tick` (Cache Keeper) get one call a minute. The timer is started
+// from events (session.start, turn.start, turn.complete), not only session.start,
+// because a /clear raises no session.start. A hot reload drops the timer and resets
+// `ticker`, so the next event starts one. It stops at session.end, and by itself
+// when no feature with a `tick` is ON.
+let ticker: { cancel: () => void } | undefined
+
+function stopTicker() {
+  ticker?.cancel()
+  ticker = undefined
+}
+
+async function minuteTick($: EngineInterface, options: PluginOptions) {
+  try {
+    if (!(await active($, options)).some(({ feature }) => feature.tick)) return stopTicker()
+    await dispatch($, options, (feature, state, ctx) => feature.tick?.(state, ctx))
+    $.ui.invalidate('ui.render')
+  } catch (error) {
+    $.ui.log(`mod-pack: minute tick failed: ${String(error)}`)
+  }
+}
+
+async function armTicker($: EngineInterface, options: PluginOptions) {
+  if (ticker || !(await active($, options).catch(() => [])).some(({ feature }) => feature.tick)) return
+  ticker = $.clock.every(60_000, () => void minuteTick($, options))
+}
+
+// ---- Cache Keeper -------------------------------------------------------------------
+
+// A compaction of the main conversation stands: every feature that watches for it clears.
+async function afterCompaction($: EngineInterface, options: PluginOptions) {
+  await dispatch($, options, (feature, state, ctx) => feature.compacted?.(state, ctx))
+  $.ui.invalidate('ui.render')
+}
+
+// What the band's "compact" button does. It ignores the press while any compaction is
+// running (the lock). `$.session.compact()` rejects while a turn runs and resolves
+// `{ skip }` when a hook vetoes: both become a toast, and the row stays as it was.
+// It runs through every hook but the calling one, so this plugin's own
+// `session.compact` hook does not see this call: the lock and the clear are done here.
+async function compactNow($: EngineInterface, options: PluginOptions) {
+  if (busyWith !== undefined) return
+  busyWith = 'compaction'
+  $.ui.invalidate('ui.render')
+  try {
+    const result = await $.session.compact()
+    if (result.skip === undefined) await afterCompaction($, options)
+    else $.ui.toast(`Cache Keeper: compaction skipped: ${result.skip}`)
+  } catch (error) {
+    $.ui.toast(`Cache Keeper: could not compact now (${String(error).slice(0, 120)})`)
+  } finally {
+    busyWith = undefined
+    $.ui.invalidate('ui.render')
   }
 }
 
@@ -205,17 +272,45 @@ export const register: Register = (on, options) => {
       .register({ name: 'mods', description: 'List the mod-pack features and turn them on or off.', argumentHint: '[on|off|toggle <id> | sound on|off | reset]' })
       .catch(error => $.ui.log(`mod-pack: could not register /mods: ${String(error)}`))
     await dispatch($, options, (feature, state, ctx) => feature.sessionStart?.(state, { e }, ctx))
+    await armTicker($, options)
     return next(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    stopTicker()
+    await dispatch($, options, (feature, state, ctx) => feature.sessionEnd?.(state, { e }, ctx)).catch(() => undefined)
+    return next(e)
+  })
+
+  // Any compaction of the main conversation: the person's /compact, the engine's own
+  // at its threshold, or a mod's. Held as the lock while it runs; the features are told
+  // when it stands. `precompute` installs nothing, and a subagent's own compaction is
+  // not the main conversation's, so neither counts.
+  on('session.compact', async ($, e, next) => {
+    if (e.trigger === 'precompute' || e.agentId !== undefined) return next(e)
+    const isOwner = busyWith === undefined
+    if (isOwner) busyWith = 'compaction'
+    $.ui.invalidate('ui.render')
+    try {
+      const result = await next(e)
+      if (result.skip === undefined) await afterCompaction($, options)
+      return result
+    } finally {
+      if (isOwner) busyWith = undefined
+      $.ui.invalidate('ui.render')
+    }
   })
 
   on('turn.start', async ($, e, next) => {
     await dispatch($, options, (feature, state, ctx) => feature.turnStart?.(state, { e }, ctx))
+    await armTicker($, options)
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
     const context = await $.session.usage().then(usage => usage.context, () => undefined)
     await dispatch($, options, (feature, state, ctx) => feature.turnComplete?.(state, { e, context }, ctx))
+    await armTicker($, options)
     return next(e)
   })
 
@@ -247,13 +342,16 @@ export const register: Register = (on, options) => {
 
     const el = $.ui.resolve(e)
     const budget = rowBudget(e.props.maxRows)
+    const now = await $.clock.now().catch(() => NaN)
+    const input = { props: e.props, now, options, isCompacting: busyWith === 'compaction' }
+    const actions = { compact: () => void compactNow($, options) }
     const states: Record<string, unknown> = await read($, featureStates)
     const rows: { id: string; row: RenderElement }[] = []
 
     for (const { feature } of await active($, options)) {
       if (rows.length >= budget) break
       try {
-        const row = feature.band?.(states[feature.id], e, el)
+        const row = feature.band?.(states[feature.id], input, el, actions)
         if (row) rows.push({ id: feature.id, row })
       } catch (error) {
         $.ui.log(`mod-pack: ${feature.id} band failed: ${String(error)}`)
