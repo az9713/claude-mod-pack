@@ -347,14 +347,14 @@ Limits:
 
 ## Install
 
-From GitHub (the repo has a `.claude-plugin/marketplace.json`):
+From GitHub (the repo root has a `.claude-plugin/marketplace.json` that points to this `mod-pack` folder):
 
 ```
-claude plugin marketplace add az9713/mod-pack
-claude plugin install mod-pack@mod-pack
+claude plugin marketplace add az9713/claude-mod-pack
+claude plugin install mod-pack@claude-mod-pack
 ```
 
-This route is untested until the repo is pushed. `az9713/mod-pack` is a placeholder for the real GitHub path.
+This route is untested until the repo `az9713/claude-mod-pack` is public.
 
 From a local folder, for one session:
 
@@ -561,7 +561,7 @@ A mod that spends model tokens also: sets `usesModel: true` and `defaultOn: fals
 tsc -p .                              # type check (strict, noUncheckedIndexedAccess)
                                       # With many MCP servers connected, tsc stops on a tool.call matcher (TS2589); register.tsx has an @ts-ignore for it.
 claude plugin test .                  # all *.test.ts and *.test.tsx
-claude plugin validate .              # with a marketplace.json present, this checks the marketplace manifest
+claude plugin validate .              # the plugin folder: the plugin manifest and the hooks module. The marketplace manifest is at the repo root: run `claude plugin validate ..`
 claude plugin validate .claude-plugin/plugin.json   # the plugin manifest and the hooks module
 node scripts/make-sounds.js           # regenerate assets/thunder.wav
 ```
@@ -588,7 +588,7 @@ Files:
 ## What is verified
 
 - Type check, unit tests and the plugin test kit pass. The kit mounts the band through the plugin on the terminal surface. It checks that another plugin's band (a stub) and the Token Weather row are both present, in that order.
-- `claude plugin validate` passes for the plugin manifest, the hooks module and the marketplace manifest.
+- `claude plugin validate` passes for the plugin manifest, the hooks module and the marketplace manifest (the root `.claude-plugin/marketplace.json` of the repo).
 - Blast Radius: the kit runs `tool.call` through the plugin with the dialog, `process.run`, `fs.stat` and `fs.list` stubbed beneath it. It checks Proceed, Cancel, a dismissed dialog, no one to ask, another answer, a safe command, the off switch, a failing preview, and a crash in the check. The stub plays the person: no dialog was drawn.
 - Cache Keeper: the kit mounts the band through the plugin on a clock that only the test moves. It checks the row text at each stage, the one toast, the restart at a new response, a subagent turn, a running turn, an interrupted turn, `/clear`, the lifetime setting (valid and invalid), the compact button (done, vetoed, rejected, two presses at once, a compaction started by someone else), the timer (one per session, stopped at `session.end`), the off switches, and the band beside Token Weather and a stub standing for next-steps. A mutation check was run: removing the clock restart, the subagent guard, or the lock guard each made the right tests fail. The kit cannot show the real cache: whether a cache is warm, the real lifetime of an account, or what the engine's `session.compact` does with a real conversation. The stub plays those.
 - Wait What, notes ("If no retell appears"): the kit checks each note with the stubs beneath the plugin: no terminal in the list of surfaces, surfaces that reject, a compaction in progress, an earlier call still running, a model call that fails with `api-error` (status 500), `empty-reply`, `aborted` and a throw, and a reply with no printable text. Each failure draws one dim line beside the next-steps stub, writes one log line with the same text, leaves the lock free, and the next good answer replaces the note. A short answer, a subagent's turn, an interrupt, an error and a refusal draw no note and log nothing. The note goes at the next prompt, is cut to one line in a narrow band, and does not show with the mod OFF, on a desktop surface, under a survey or while a turn runs. `/mods` shows the `last:` line, also when the band has no row for the note. The kit cannot show: the clock note in a plugin flow (its clock cannot be made unreadable, so only the pure rule is tested), what the real engine lists as surfaces in a terminal session, a real model error, or any of it on a real screen. A mutation check (removing the note and the log from the failure path) made exactly 6 tests fail: the two unit tests of that path and the four flow tests of the failed reasons.
