@@ -1,8 +1,8 @@
 # mod-pack
 
-A pack of small Claude Code mods in one plugin. The mods draw in the band above the prompt. They share that band without overwriting each other, or other plugins. `/mods` turns each one on or off.
+A pack of small Claude Code mods in one plugin. Token Weather draws in the band above the prompt. The mods that draw share that band without overwriting each other, or other plugins. Blast Radius draws nothing: it asks a question. `/mods` turns each one on or off.
 
-Status: version 0.1.0. One mod exists. The tests and `claude plugin validate` pass. No person has yet watched mod-pack draw in a real terminal. See "What is verified".
+Status: version 0.1.0. Two mods exist. The tests and `claude plugin validate` pass. No person has yet watched mod-pack draw in a real terminal or seen the Blast Radius dialog. See "What is verified".
 
 Requires Claude Code 2.1.287 or later. Mods are plugins of "function hooks", an early-access API that can change between releases.
 
@@ -11,7 +11,7 @@ Requires Claude Code 2.1.287 or later. Mods are plugins of "function hooks", an 
 | Mod | Status | What it does |
 | --- | --- | --- |
 | Token Weather (`token-weather`) | available | One row above the prompt: a weather word for how full the context window is, the percent, tokens against the window, a 12-turn chart, and the change since the last turn. Plays thunder when the window fills into Storm or Compact soon (sound is off by default). |
-| Blast Radius | planned, not built | |
+| Blast Radius (`blast-radius`) | available | Before Claude runs a risky shell command (`rm -rf`, `git reset --hard`, `git push --force`, ...), it holds the command and asks Proceed or Cancel in the question dialog, with a read-only preview of what would change. No band row. No model tokens. See "Blast Radius". |
 | Cache Keeper | planned, not built | |
 | Wait What | planned, not built | |
 | Prompt Queue | planned, not built | |
@@ -28,6 +28,69 @@ Token Weather bands:
 | 90 and over | ↯ Compact soon | red |
 
 The window size is read from Claude Code (`context.window`). It is not fixed in the code.
+
+## Blast Radius
+
+Blast Radius holds a risky shell command until the person answers. It is a safety net, not a permission system.
+
+What it holds. A rule matches only at the start of one command of a chain, after `sudo`, `VAR=x`, `xargs`, `time` and `sh -c '...'` are removed.
+
+| Kind | Held | Not held (decision) |
+| --- | --- | --- |
+| Recursive delete | `rm -r`, `-rf`, `-fr`, `-r -f`, `-R`, `--recursive`; `rmdir /s`, `rd /s`, `del /s`; `Remove-Item -Recurse` (and `ri`, `rm`, `del` with `-Recurse`) | `rm file`, `rm -f file`, `rmdir dir`, `del file`: one named file or an empty folder. `rm -f *` is also not held. |
+| `git reset --hard` | any target | `--soft`, `--mixed`, `git reset HEAD file` |
+| `git clean` | `-f`, `-d`, `-x`, `-X`, `--force` | any form with `-n` or `--dry-run` |
+| `git push` | `--force`, `-f`, `--force-with-lease`, `+branch` | plain `git push`, `-u`. `--force-with-lease` is held because it still overwrites remote history. |
+| Discard working changes | `git checkout -- .`, `git checkout .`, `git restore .` | `git restore --staged .` (only unstages), `git restore file` |
+| `git branch -D` | yes | `git branch -d` |
+| `git stash drop`, `git stash clear` | yes | `git stash`, `pop`, `list` |
+
+A command is split on `&&`, `||`, `;`, `|`, `&`, newlines, `$(` and backticks. Each part is tested. The rules are a table in `hooks/blast-radius.ts`.
+
+What the dialog says (text only: nobody has seen it drawn):
+
+```
+[Blast Radius]
+Blast Radius holds this command: recursive delete (rm -r).
+
+  rm -rf build dist
+
+What would change (a best-effort, read-only check):
+  build: directory, 412 entries inside
+  dist: not found
+
+Run it now?
+  Proceed    Cancel    (or type a different answer)
+```
+
+Only the exact label Proceed lets the command run, unchanged. Cancel, a dismissed dialog, text typed under "Other", and no answer all deny the command. Claude then reads: the person cancelled, the command did not run, do not retry the same command unprompted.
+
+The preview is best effort. Each git step has its own 3 second limit and an output cap, and a failed step becomes "no preview available". The dialog is shown in every case.
+
+| Command | Preview |
+| --- | --- |
+| `rm`, `rmdir`, `del`, `Remove-Item` | For each plain path (up to 8): not found, file, symbolic link, or directory with an entry count over every level. The count stops at 1000 ("1000+"). A symbolic link is never entered. Globs, variables and `~` are listed as not previewed. After a `cd` in the same command, relative paths are not looked at. |
+| `git reset --hard`, `git checkout -- .`, `git restore .` | `git status --porcelain` count and the first 10 paths, and `git diff --shortstat HEAD`. Untracked files are named as not touched. |
+| `git clean` | `git clean -n` with the same flags: count and the first 10 paths. |
+| `git push --force` | Current branch, upstream, and the commits on the remote that the branch lacks, from the last fetch. A count only for `git push -f [remote] [branch]`. |
+| `git branch -D` | For up to 3 names: commits not in the current branch. |
+| `git stash drop`, `clear` | The stash list. |
+
+The previews only read. They run `git status`, `git diff`, `git clean -n`, `git rev-parse`, `git rev-list`, `git log` and `git stash list` as an argument list (no shell) in the session folder. The git options of the command itself (`-C`, `-c`) are not passed on: a `-c core.fsmonitor=...` would run code before the person said yes. Outside a git repository, or with git missing, the preview says "no preview available".
+
+Non-interactive runs fail closed. `$.ui.ask` rejects when nobody can be asked (a `claude -p` run), and Blast Radius turns that into a denial. So a `claude -p` run denies every risky command. It never runs one unasked.
+
+If the check itself crashes or runs out of its 10 seconds, the engine skips the hook and the command would run. Blast Radius sets a `.catch` handler for that case. The handler classifies the command again. It asks the person again, without a preview, for a risky command or when it cannot classify. It lets a command through unasked only when the command is clearly safe or the mod is off.
+
+Switch it off: `/mods off blast-radius` (at once, no reload), or set `blastRadius` to `false` (see "Settings").
+
+Limits:
+
+- It is a safety net, not a permission system. It sees the text of the command. It does not catch an alias, a script that calls `rm`, a command built from variables (`rm -rf "$DIR"`, `eval "$cmd"`), other quoting tricks, or destructive commands outside the table (`find -delete`, `dd`, `mkfs`, a `>` redirect over a file, `git checkout -f`).
+- Text that only mentions a command is not held (`echo "rm -rf x"`, `grep rm -rf README`). Text in quotes that holds a separator can be a false positive (`echo "a; rm -rf x"`). That is accepted.
+- It is wired to the Bash and PowerShell tool calls only. It does not look at other tools (Edit, Write, MCP tools). Whether the person's own `!` shell commands pass through `tool.call` was not checked.
+- The dialog comes before Claude Code's own permission prompt for the same command. In a mode that skips permission prompts, Blast Radius still asks.
+- Global git options in the command give "no preview available" for the git kinds.
 
 ## Install
 
@@ -69,6 +132,7 @@ Each mod has one setting, and there is one global `sound` setting. They are the 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `tokenWeather` | `true` | Show Token Weather. |
+| `blastRadius` | `true` | Ask Proceed or Cancel before a risky shell command. |
 | `sound` | `false` | Let mods that can play a sound play it. |
 
 Sound is off by default. This is a polite default for a public pack.
@@ -94,11 +158,11 @@ All mods in the pack draw through one compositor. It is the only `ui.render` hoo
 5. **Terminal only.** On a surface that is not `terminal`, or while a survey holds the band (`hasSurvey`), the compositor returns `below` unchanged.
 6. **No digit hotkeys.** Never put `hotkey="1"` (or any digit) on a Button in a mod. A digit hotkey also fires when the person types that digit into an empty prompt. next-steps already owns 0, 1, 2 and 3. Use a letter hotkey, or a click, or no hotkey.
 
-The same rule of one hook applies to events. The engine refuses a plugin that registers the same event twice without a matcher. So `register.tsx` registers `ui.render`, `turn.start`, `turn.complete` and `session.start` once each, and calls the mods. A matched hook (`command.run` for `mods`) can be registered several times.
+The same rule of one hook applies to events. The engine refuses a plugin that registers the same event twice without a matcher. So `register.tsx` registers `ui.render`, `turn.start`, `turn.complete` and `session.start` once each, and calls the mods. A matched hook can be registered several times: `command.run` for `mods`, and `tool.call` for `Bash` and for `PowerShell` (Blast Radius).
 
 ## Cost, sound and safety
 
-- A mod is code. It runs with your permissions. Read a mod before you enable it. Token Weather reads the context-window size and your token count, keeps them in session state, and draws. It makes no network call and spends no model tokens.
+- A mod is code. It runs with your permissions. Read a mod before you enable it. Token Weather reads the context-window size and your token count, keeps them in session state, and draws. It makes no network call and spends no model tokens. Blast Radius runs read-only `git` commands and reads folder listings to build its preview. It makes no network call and spends no model tokens.
 - Spend rule for mods that call a model (none yet). A mod must set `usesModel: true`, so `/mods` shows it. It must use the cheapest model by default (for example the `haiku` alias). It must make at most 30 model calls an hour. There is no helper for this yet. The first mod that calls a model adds one.
 - Sound is off by default. See "Settings".
 - Mod errors are caught one by one and written to the UI log. One failing mod does not stop the others.
@@ -138,6 +202,7 @@ Steps:
 
 ```
 tsc -p .                              # type check (strict, noUncheckedIndexedAccess)
+                                      # With many MCP servers connected, tsc stops on a tool.call matcher (TS2589); register.tsx has an @ts-ignore for it.
 claude plugin test .                  # all *.test.ts and *.test.tsx
 claude plugin validate .              # with a marketplace.json present, this checks the marketplace manifest
 claude plugin validate .claude-plugin/plugin.json   # the plugin manifest and the hooks module
@@ -155,6 +220,7 @@ Files:
 | `hooks/settings.ts` | Pure: on/off resolution, sound gate, row budget. |
 | `hooks/mods-command.ts` | Pure: the `/mods` parser. |
 | `hooks/token-weather.tsx`, `hooks/forecast.ts` | The Token Weather mod and its pure logic. |
+| `hooks/blast-radius.ts` | The Blast Radius mod: the rule table, the preview plans and text, the dialog text. Pure. |
 | `types/index.d.ts` | The `$.state` contract. |
 | `assets/thunder.wav`, `scripts/make-sounds.js` | The sound and the script that makes it. |
 
@@ -162,7 +228,8 @@ Files:
 
 - Type check, unit tests and the plugin test kit pass. The kit mounts the band through the plugin on the terminal surface. It checks that another plugin's band (a stub) and the Token Weather row are both present, in that order.
 - `claude plugin validate` passes for the plugin manifest, the hooks module and the marketplace manifest.
-- Not verified: how it looks in a real terminal, the real sound output, the install from GitHub, and a run beside the real next-steps plugin.
+- Blast Radius: the kit runs `tool.call` through the plugin with the dialog, `process.run`, `fs.stat` and `fs.list` stubbed beneath it. It checks Proceed, Cancel, a dismissed dialog, no one to ask, another answer, a safe command, the off switch, a failing preview, and a crash in the check. The stub plays the person: no dialog was drawn.
+- Not verified: how it looks in a real terminal, how the Blast Radius question looks on screen, what the real `claude -p` does with a risky command (the code fails closed, from the type declarations), the real sound output, the install from GitHub, and a run beside the real next-steps plugin.
 
 ## License
 

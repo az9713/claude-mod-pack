@@ -14,6 +14,13 @@
       "required": false,
       "default": true
     },
+    "blastRadius": {
+      "type": "boolean",
+      "title": "Blast Radius",
+      "description": "Ask Proceed or Cancel, with a preview of what would change, before Claude runs a risky shell command (rm -rf, git reset --hard, git push --force, ...). A non-interactive run denies those commands. Costs no model tokens.",
+      "required": false,
+      "default": true
+    },
     "sound": {
       "type": "boolean",
       "title": "Sound",
