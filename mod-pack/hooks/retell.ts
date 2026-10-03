@@ -3,7 +3,7 @@
 // the reply is cleaned and fitted to the band. No engine calls and no `$`, so every
 // rule can be tested alone.
 
-import type { ModelAsk } from './feature'
+import type { Lock, ModelAsk, ModelReply } from './feature'
 
 // The cheapest model, by its alias. The alias is documented in the type declarations
 // (`ModelCompleteRequest.model`); no dated id is written here.
@@ -141,3 +141,48 @@ export const fitLines = (lines: readonly string[], width: number): string[] => {
   }
   return lines.slice(0, MAX_LINES).map(line => fit(line, w))
 }
+
+// ---- why there is no retell ------------------------------------------------------------
+// After a long answer of the main conversation that makes no call and no retell, the band shows
+// one dim line `wait what: <note>`. These are the notes. A short answer, a subagent's turn and an
+// interrupted, failed or refused turn are normal skips: they have no note.
+
+export const NOTE_CLOCK = 'clock unreadable'
+export const NOTE_NO_TEXT = 'reply had no printable text'
+export const NOTE_SURFACES_UNREADABLE = 'could not read the session surfaces'
+
+// The terminal is not among the surfaces that were read. What was read is named, to tell a wrong
+// list from a missing one.
+export const noTerminalNote = (surfaces: readonly string[]) => {
+  const seen = surfaces.map(s => String(s).replace(/[^\w-]/g, '')).filter(Boolean)
+  return `no terminal surface seen (saw: ${seen.length ? seen.join(', ') : 'none'})`
+}
+
+// The shared lock is held, so no call is made. `lock` names the holder.
+export const lockNote = (lock: Lock | undefined) =>
+  lock === 'compaction' ? 'a compaction is running'
+  : lock === 'prompt-submit' ? 'a queued prompt is being sent'
+  : lock === 'model-call' ? 'an earlier retell call is still running'
+  : 'another automatic action holds the lock'
+
+// Text from outside (an HTTP error kind, a refusal's message) is cleaned as a reply is, and kept short.
+const short = (text: string) => (parseReply(text)[0] ?? '').slice(0, 80)
+
+// The call ran and gave no text: what the engine said of it.
+export const failureNote = (reply: Extract<ModelReply, { isAnswered: false }>): string => {
+  const error = reply.error === undefined ? '' : short(reply.error)
+  if (reply.reason === 'api-error') {
+    const status = reply.status === undefined ? '' : `, status ${reply.status ?? 'none'}`
+    return `model call failed (api-error${status}${error ? `, ${error}` : ''})`
+  }
+  if (reply.reason === 'empty-reply') return 'model returned no text (empty-reply)'
+  if (reply.reason === 'aborted') return 'model call timed out or was cut (aborted)'
+  return `model call refused by Claude Code (rejected${error ? `: ${error}` : ''})`
+}
+
+// The two normal skips, as text for `/mods` only. The band stays silent for them (they have no note).
+export const turnEndedText = (reason: string) => `the turn ended with reason ${reason}`
+export const tooShortText = (chars: number) => `the answer had ${chars} characters; ${MIN_ANSWER_CHARS} are needed`
+
+// The note as one line of `width` cells, label first, cut with an ellipsis.
+export const fitNote = (note: string, width: number) => fit(`${LABEL}${note}`, Math.max(MIN_WIDTH, Math.floor(Number.isFinite(width) ? width : MIN_WIDTH)))

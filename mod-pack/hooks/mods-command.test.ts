@@ -19,6 +19,17 @@ test('/mods lists every feature with state, description and flags', () => {
   expect(run('list').text).toBe(text)
 })
 
+test('/mods shows `last:` under a feature that is ON and has something to say; never under one that is OFF', () => {
+  const last = { 'token-weather': 'forecast shown', 'wait-what': 'clock unreadable', 'no-such-feature': 'x' }
+  const text = runMods('', features, none, {}, last).text
+  expect(text).toMatch(/ON\s+token-weather[^\n]*\n    last: forecast shown\n/)
+  expect(text).not.toContain('clock unreadable') // wait-what is OFF here
+  expect(text).not.toContain('no-such-feature')
+  const on = runMods('', features, { features: { 'wait-what': true } }, {}, last).text
+  expect(on).toMatch(/ON\s+wait-what[^\n]*\n    last: clock unreadable\n/)
+  expect(runMods('', features, none, {}, {}).text).toBe(text.replace(/\n    last: [^\n]*/g, ''))
+})
+
 test('/mods list follows overrides and settings', () => {
   const text = run('', { features: { 'wait-what': true }, sound: true }, { tokenWeather: false }).text
   expect(text).toContain('sound: ON')

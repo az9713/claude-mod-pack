@@ -86,6 +86,7 @@ async function dispatchOne($: EngineInterface, options: PluginOptions, feature: 
       await update($, featureStates, all => ({ ...all, [feature.id]: state }))
     }
     if (step?.toast) $.ui.toast(step.toast)
+    if (step?.log) $.ui.log(`mod-pack: ${feature.id}: ${step.log}`)
     if (step?.sound && ctx.isSoundAllowed) void $.audio.play({ asset: step.sound }).catch(() => undefined)
     if (step?.ask && stop) {
       // Detached: the event that raised this call never waits for the model.
@@ -218,18 +219,22 @@ async function runSubmit($: EngineInterface, options: PluginOptions, feature: Fe
 // One model call for a feature, then the reply to the feature (`modelDone`). It is called with
 // `void`, so it never throws: every failure ends as "no reply". The call is `$.model.complete`:
 // no history, so the conversation and its cache are not touched. It always resolves a result,
-// and rejects only for a request the engine refuses to send (a blocked model).
+// and rejects only for a request the engine refuses to send (a blocked model). A failed call goes back
+// with its reason (`api-error` and its status, `empty-reply`, `aborted`, or `rejected`).
 async function runAsk($: EngineInterface, options: PluginOptions, feature: Feature, ask: ModelAsk, stop: AbortController) {
   try {
-    let reply: ModelReply = { isAnswered: false }
+    let reply: ModelReply = { isAnswered: false, reason: 'rejected' }
     try {
       const result = await $.model.complete(
         { model: ask.model, system: ask.system, prompt: ask.prompt, maxTokens: ask.maxTokens, timeoutMs: ask.timeoutMs, ...(ask.effort ? { effort: ask.effort } : {}) },
         { signal: stop.signal },
       )
       if (result.isAnswered) reply = { isAnswered: true, text: result.text }
+      else if (result.reason === 'api-error') reply = { isAnswered: false, reason: 'api-error', status: result.status, error: String(result.error) }
+      else reply = { isAnswered: false, reason: result.reason }
     } catch (error) {
-      $.ui.log(`mod-pack: ${feature.id} model call failed: ${String(error).slice(0, 200)}`)
+      // The engine refused to send the request. The feature gets the text, and logs it (`Step.log`).
+      reply = { isAnswered: false, reason: 'rejected', error: String(error).slice(0, 200) }
     } finally {
       releaseAsk(stop)
     }
@@ -671,9 +676,11 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const context = await $.session.usage().then(usage => usage.context, () => undefined)
-    // A mod that spends tokens on a row only the terminal draws asks for this. Unknown counts as no terminal.
-    const hasTerminal = await $.session.surfaces().then(surfaces => surfaces.includes('terminal'), () => false)
-    await dispatch($, options, (feature, state, ctx) => feature.turnComplete?.(state, { e, context, hasTerminal }, ctx))
+    // A mod that spends tokens on a row only the terminal draws asks for this. Unknown counts as no terminal,
+    // and `surfaces` is then undefined, so a list without the terminal and an unreadable list are told apart.
+    const surfaces = await $.session.surfaces().then(list => list, () => undefined)
+    const hasTerminal = surfaces?.includes('terminal') === true
+    await dispatch($, options, (feature, state, ctx) => feature.turnComplete?.(state, { e, context, hasTerminal, surfaces }, ctx))
     await armTicker($, options)
     // The main conversation's turn ended: a running game pauses. A subagent's turn is not Claude finishing.
     if (e.agentId === undefined) await snakeChange($, options, game => pauseFor(game, 'claude'))
@@ -682,7 +689,10 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'mods' }, async ($, e) => {
     const before = parseOverrides(await $.store.get(STORE_KEY))
-    const result = runMods(e.args, FEATURES, before, options)
+    // What each feature says of its last outcome (`Feature.last`), for the list. Best effort: a state that cannot be read adds none.
+    const states: Record<string, unknown> = await read($, featureStates).catch(() => ({}))
+    const last = Object.fromEntries(FEATURES.flatMap(f => { const text = f.last?.(states[f.id]); return text ? [[f.id, text]] : [] }))
+    const result = runMods(e.args, FEATURES, before, options, last)
     if (result.isChanged) {
       await $.store.set(STORE_KEY, result.overrides)
       // Snake switched off: its pane closes and its timer stops at once.

@@ -9,7 +9,9 @@ export type ModPackCacheClock = { at?: number; tokens?: number; isWorking?: bool
 
 // Wait What: the start times of the model calls of the last hour (the hourly cap), the turn whose
 // call is in flight, and the retell lines to show (1 or 2). `isLimited`: the cap refused the last call.
-export type ModPackRetell = { calls?: number[]; pending?: string; lines?: string[]; isLimited?: boolean }
+// `note`: why a long answer got no retell (drawn as one dim line). `skipped`: why the last answer was a
+// normal skip (never drawn; `/mods` shows it).
+export type ModPackRetell = { calls?: number[]; pending?: string; lines?: string[]; isLimited?: boolean; note?: string; skipped?: string }
 
 // Prompt Queue: the prompts waiting (first to send first), why the queue is paused (if it is), whether a
 // turn of the main conversation runs, and the turn that last sent a prompt (it never sends twice).

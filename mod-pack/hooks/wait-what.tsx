@@ -18,9 +18,16 @@
 //     its reply is dropped. The retell shows nothing while the call runs.
 //   - A call counts toward the hourly cap when it STARTS, and a failed call counts too.
 //   - No call while a compaction runs (the lock); no toast; no sound.
+//   - A long answer of the main conversation that makes no call and no retell leaves a NOTE: one dim
+//     band line `wait what: <note>` that says why (retell.ts lists them). The note goes at the next
+//     `turn.start`. The normal skips (a short answer, a subagent's turn, an interrupted, failed or
+//     refused turn) leave no note and draw nothing; `/mods` still says what the last turn was (`last`).
 
 import { defineFeature } from './feature'
-import { addCall, buildAsk, callLimit, canCall, fitLines, LABEL, LIMIT_TEXT, MIN_ANSWER_CHARS, parseReply, recentCalls } from './retell'
+import {
+  addCall, buildAsk, callLimit, canCall, failureNote, fitLines, fitNote, LABEL, LIMIT_TEXT, lockNote, MIN_ANSWER_CHARS, noTerminalNote, NOTE_CLOCK, NOTE_NO_TEXT,
+  NOTE_SURFACES_UNREADABLE, parseReply, recentCalls, tooShortText, turnEndedText,
+} from './retell'
 import type { BandInput } from './feature'
 
 // What the dispatcher keeps in $.state for this mod.
@@ -33,12 +40,18 @@ export type Retell = {
   lines?: string[]
   // True when the last answer was long enough but the hourly cap refused the call.
   isLimited?: boolean
+  // Why a long answer got no retell (see the notes in retell.ts). Drawn as one dim band line.
+  note?: string
+  // Why the last answer was skipped as normal (short, interrupted, failed, refused). Never drawn in
+  // the band; only `/mods` shows it.
+  skipped?: string
 }
 
-// What the band draws now: the retell lines, the one limit line, or nothing.
+// What the band draws now: the retell lines, else the note, else the one limit line, else nothing.
 const view = (state: Retell | undefined, { props }: BandInput): string[] => {
   if (props.isWorking) return []
   if (state?.lines?.length) return fitLines(state.lines, props.bodyColumns - LABEL.length - 1)
+  if (state?.note) return [fitNote(state.note, props.bodyColumns - 1)]
   return state?.isLimited ? [LIMIT_TEXT] : []
 }
 
@@ -52,7 +65,7 @@ export const waitWhat = defineFeature<Retell>({
   // The retell and the call in flight belong to the old turn. The hourly count stays.
   turnStart: state => ({ state: { calls: state?.calls } }),
 
-  turnComplete(state, { e, hasTerminal }, ctx) {
+  turnComplete(state, { e, hasTerminal, surfaces }, ctx) {
     // A subagent's turn is not the answer the person reads.
     if (e.agentId !== undefined) return undefined
 
@@ -60,22 +73,38 @@ export const waitWhat = defineFeature<Retell>({
     // count is stored as `recentCalls` made it: old calls dropped, a call from a clock set back as now.
     const calls = Number.isFinite(ctx.now) ? recentCalls(state?.calls, ctx.now) : state?.calls
     const stale: Retell = { calls }
+
+    // The normal skips draw nothing. `skipped` is for `/mods` only.
+    if (e.reason !== 'answer' || e.isAborted) return { state: { ...stale, skipped: turnEndedText(e.reason) } }
     const answer = e.answer.trim()
-    if (e.reason !== 'answer' || e.isAborted || !hasTerminal || answer.length < MIN_ANSWER_CHARS) return { state: stale }
+    if (answer.length < MIN_ANSWER_CHARS) return { state: { ...stale, skipped: tooShortText(answer.length) } }
+
+    // From here the answer is long and the main conversation's: no call now is a fact to show.
+    const noted = (note: string): { state: Retell } => ({ state: { ...stale, note } })
+    // `surfaces` is undefined when `$.session.surfaces()` rejected; a list without the terminal is another cause.
+    if (!hasTerminal) return noted(surfaces === undefined ? NOTE_SURFACES_UNREADABLE : noTerminalNote(surfaces))
 
     // A clock that cannot be read cannot count the hour: no call (the safe side for spend).
-    // The lock is held (a compaction runs): no call, and the budget is not touched.
-    if (!Number.isFinite(ctx.now) || ctx.isBusy) return { state: stale }
+    if (!Number.isFinite(ctx.now)) return noted(NOTE_CLOCK)
+    // The lock is held (a compaction, a queued send, an earlier call): no call, and the budget is not touched.
+    if (ctx.isBusy) return noted(lockNote(ctx.lock))
 
     if (!canCall(calls, ctx.now, callLimit(ctx.options.maxModelCallsPerHour))) return { state: { calls, isLimited: true } }
     return { state: { calls: addCall(calls, ctx.now), pending: e.turnId }, ask: buildAsk(e.turnId, answer) }
   },
 
   // The call ended. A reply for a turn that is no longer the pending one came late: drop it.
+  // No text, for any reason, leaves a note and one log line (the band may be clipped, the log stays).
   modelDone(state, { turnId, reply }) {
     if (state?.pending !== turnId) return undefined
-    const lines = reply.isAnswered ? parseReply(reply.text) : []
-    return { state: lines.length > 0 ? { calls: state.calls, lines } : { calls: state.calls } }
+    const calls = state.calls
+    if (!reply.isAnswered) {
+      const note = failureNote(reply)
+      return { state: { calls, note }, log: note }
+    }
+    const lines = parseReply(reply.text)
+    if (lines.length === 0) return { state: { calls, note: NOTE_NO_TEXT }, log: NOTE_NO_TEXT }
+    return { state: { calls, lines } }
   },
 
   // /clear or an exit: the retell goes, the hourly count stays (the cap is on spend).
@@ -107,4 +136,12 @@ export const waitWhat = defineFeature<Retell>({
   },
 
   bandLines: (state, e) => view(state, e).length,
+
+  // For `/mods`: the last outcome, also when the band had no room to draw it.
+  last(state) {
+    if (state?.note) return state.note
+    if (state?.lines?.length) return 'retell shown'
+    if (state?.isLimited) return 'hourly limit reached'
+    return state?.skipped ? `no retell needed: ${state.skipped}` : undefined
+  },
 })

@@ -28,7 +28,7 @@ const turn = (id: string, over: Record<string, unknown> = {}) =>
 
 const ON = { options: { waitWhat: true } }
 
-type Mode = 'ok' | 'api-error' | 'empty' | 'throw'
+type Mode = 'ok' | 'api-error' | 'empty' | 'aborted' | 'throw'
 
 // `w.*` can be changed in the middle of a test: the stubs read it at each call.
 const world = (on: any, init: { modelHold?: number; compactHold?: number } = {}) => {
@@ -45,8 +45,13 @@ const world = (on: any, init: { modelHold?: number; compactHold?: number } = {})
     compactHold: init.compactHold ?? 0,
     compacts: [] as unknown[],
     toasts: [] as string[],
+    logs: [] as string[], // the lines the plugin wrote with $.ui.log
     order: [] as string[], // what happened first, for the ordering tests
   }
+  on('ui.log', (_$: any, e: any) => {
+    w.logs.push(typeof e.text === 'string' ? e.text : JSON.stringify(e))
+    return { value: undefined }
+  })
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => {
     const { Text } = $.ui.resolve(e)
     return Text({ children: MARKER })
@@ -77,6 +82,7 @@ const world = (on: any, init: { modelHold?: number; compactHold?: number } = {})
     if (w.mode === 'throw') throw new Error('model blocked')
     if (w.mode === 'api-error') return { value: { isAnswered: false, reason: 'api-error', status: 500, error: 'server_error', usage: ZERO } }
     if (w.mode === 'empty') return { value: { isAnswered: false, reason: 'empty-reply', usage: ZERO } }
+    if (w.mode === 'aborted') return { value: { isAnswered: false, reason: 'aborted', usage: ZERO } }
     return { value: { isAnswered: true, text: w.reply(n), usage: USAGE } }
   })
   return w
@@ -303,6 +309,7 @@ test('late result: a newer answer ends while the older call runs. The lock is he
   expect(w.modelCalls).toHaveLength(1)
   const ui = await mountBand($)
   expect(await has(ui, /Reply/)).toBe(false) // t1's retell belongs to an answer that is no longer the last one
+  expect(await has(ui, 'wait what: an earlier retell call is still running')).toBe(true) // t2 got no call: the lock was held
 
   w.modelHold = 0
   await $.turn.complete(turn('t3'))
@@ -333,16 +340,38 @@ test('while a turn runs (isWorking) the row is not drawn', ON, async ($, on) => 
   await ui.unmount()
 })
 
-for (const mode of ['api-error', 'empty', 'throw'] as const) {
-  test(`the model call fails (${mode}): no row, no crash, the other plugin draws, the lock is free, and the next answer is retold`, ON, async ($, on) => {
+// The note that each failed call leaves in the band, and in the log.
+const FAILED: Record<'api-error' | 'empty' | 'aborted' | 'throw', RegExp> = {
+  'api-error': /^wait what: model call failed \(api-error, status 500, server_error\)$/,
+  empty: /^wait what: model returned no text \(empty-reply\)$/,
+  aborted: /^wait what: model call timed out or was cut \(aborted\)$/,
+  // The kit answers a throwing stub with its own HooksError text, which the band cuts to the width.
+  throw: /^wait what: model call refused by Claude Code \(rejected: .+/,
+}
+
+for (const mode of ['api-error', 'empty', 'aborted', 'throw'] as const) {
+  test(`the model call fails (${mode}): a note line says why, one log line, no crash, the other plugin draws, the lock is free, and the next answer is retold`, ON, async ($, on) => {
     const w = world(on)
     w.mode = mode
     await $.turn.complete(turn('t1'))
     await w.clock.settle()
     expect(w.modelCalls).toHaveLength(1)
     const ui = await mountBand($)
-    expect(await has(ui, /Reply|wait what/)).toBe(false)
+    const note = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text as string).filter((t: string) => t.startsWith('wait what:'))
+    expect(note).toHaveLength(1)
+    expect(note[0]).toMatch(FAILED[mode])
+    expect(await has(ui, /Reply/)).toBe(false)
     expect(await has(ui, MARKER)).toBe(true)
+    expect(JSON.stringify(await ui.drawn())).toContain('"dimColor":true')
+    expect(JSON.stringify(await ui.drawn())).not.toContain('"height":2') // one line
+    // The log holds the same text, once. The band may have cut it with an ellipsis (only the rejected text is long).
+    const shown = note[0]!.slice('wait what: '.length).replace(/…$/, '')
+    expect(w.logs).toHaveLength(1)
+    expect(w.logs[0]!.startsWith('mod-pack: wait-what: ')).toBe(true)
+    const logged = w.logs[0]!.slice('mod-pack: wait-what: '.length)
+    if (mode === 'throw') expect(logged.startsWith(shown)).toBe(true)
+    else expect(logged).toBe(shown)
+    expect(w.logs.some(l => /wait-what failed/.test(l))).toBe(false)
     expect(w.toasts).toEqual([])
 
     // The lock is free: the compact button works at once (a Cache Keeper row stands after the answer).
@@ -356,9 +385,22 @@ for (const mode of ['api-error', 'empty', 'throw'] as const) {
     await w.clock.settle()
     expect(w.modelCalls).toHaveLength(2)
     expect(await has(ui, 'Reply 2, line one.')).toBe(true)
+    expect(await has(ui, /wait what: model/)).toBe(false) // a good retell replaces the note
+    expect(w.logs).toHaveLength(1)
     await ui.unmount()
   })
 }
+
+test('a reply with no printable text (only escape sequences): a note, one log line', ON, async ($, on) => {
+  const w = world(on)
+  w.reply = () => '\x1b[2J \u200B\n  '
+  await $.turn.complete(turn('t1'))
+  await w.clock.settle()
+  const ui = await mountBand($)
+  expect(await has(ui, 'wait what: reply had no printable text')).toBe(true)
+  expect(w.logs).toEqual(['mod-pack: wait-what: reply had no printable text'])
+  await ui.unmount()
+})
 
 test('a failed call still counts toward the hourly cap (a failing model cannot be hit without limit)', { options: { waitWhat: true, maxModelCallsPerHour: 2 } }, async ($, on) => {
   const w = world(on)
@@ -494,6 +536,8 @@ test('a compaction in progress: no model call, then none retroactively, and no b
   expect(w.modelCalls).toHaveLength(0)
   const ui = await mountBand($)
   expect(await has(ui, /Reply|hourly limit/)).toBe(false)
+  expect(await has(ui, 'wait what: a compaction is running')).toBe(true) // the long answer got no call, and the band says why
+  expect(w.logs).toEqual([]) // a skip for the lock is not logged
   await ui.unmount()
 
   await $.turn.complete(turn('t2')) // the lock is free; the budget of 1 is still whole
@@ -671,5 +715,173 @@ test('one long line is split into two lines to fit a narrow band; each line is i
   for (const line of lines) expect(line.length).toBeLessThanOrEqual(60 - 'wait what: '.length)
   expect(lines[1]!.endsWith('.') || lines[1]!.endsWith('…')).toBe(true)
   expect(JSON.stringify(await ui.drawn()).match(/"height":2/g)).toHaveLength(1)
+  await ui.unmount()
+})
+
+// ---- why there is no retell: the note line ----
+
+const noteLines = async (ui: any) => (await ui.findAll({ type: 'Text' })).map((t: any) => t.text as string).filter((t: string) => t.startsWith('wait what:'))
+
+test('no terminal surface: no call, and a note line below the next-steps stub says which surfaces were seen', ON, async ($, on) => {
+  const w = world(on)
+  w.surfaces = ['desktop']
+  await $.turn.complete(turn('t1'))
+  await w.clock.settle()
+  expect(w.modelCalls).toHaveLength(0)
+  const ui = await mountBand($)
+  expect(await noteLines(ui)).toEqual(['wait what: no terminal surface seen (saw: desktop)'])
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree.indexOf('no terminal surface seen')).toBeGreaterThan(tree.indexOf(MARKER)) // beside the stub, below it
+  expect(tree).toContain('"dimColor":true')
+  expect(w.logs).toEqual([]) // not a model failure: no log line
+  await ui.unmount()
+
+  w.surfaces = []
+  await $.turn.complete(turn('t2'))
+  const again = await mountBand($)
+  expect(await noteLines(again)).toEqual(['wait what: no terminal surface seen (saw: none)'])
+  await again.unmount()
+})
+
+test('surfaces that cannot be read: the note says so, and it is not the same as a list with no terminal', ON, async ($, on) => {
+  const w = world(on)
+  w.surfaces = 'reject'
+  await $.turn.complete(turn('t1'))
+  await w.clock.settle()
+  expect(w.modelCalls).toHaveLength(0)
+  const ui = await mountBand($)
+  expect(await noteLines(ui)).toEqual(['wait what: could not read the session surfaces'])
+  await ui.unmount()
+})
+
+test('the note goes at the next turn.start, and a retell of the next answer replaces it', ON, async ($, on) => {
+  const w = world(on)
+  w.surfaces = ['desktop']
+  await $.turn.complete(turn('t1'))
+  const ui = await mountBand($)
+  expect(await noteLines(ui)).toHaveLength(1)
+  await $.turn.start({ text: 'go', turnId: 't2' })
+  expect(await noteLines(ui)).toEqual([])
+  w.surfaces = ['terminal']
+  await $.turn.complete(turn('t2'))
+  await w.clock.settle()
+  expect(await noteLines(ui)).toEqual(['wait what: '])  // the label of the retell, with no note after it
+  expect(await has(ui, 'Reply 1, line one.')).toBe(true)
+  await ui.unmount()
+})
+
+test('the normal skips draw no note and log nothing: a short answer, a subagent, an interrupt, an error, a refusal', ON, async ($, on) => {
+  const w = world(on)
+  await $.turn.complete(turn('t1', { answer: 'x'.repeat(199) }))
+  await $.turn.complete(turn('t2', { agentId: 'agent-1' }))
+  await $.turn.complete(turn('t3', { reason: 'aborted', isAborted: true }))
+  await $.turn.complete(turn('t4', { reason: 'error' }))
+  await $.turn.complete(turn('t5', { reason: 'refusal', refusal: { category: null, explanation: null } }))
+  await w.clock.settle()
+  const ui = await mountBand($)
+  expect(await has(ui, /wait what|wait-what/)).toBe(false)
+  expect(await has(ui, MARKER)).toBe(true)
+  expect(w.logs).toEqual([])
+  await ui.unmount()
+
+  // no terminal and a SHORT answer: still silent (the answer was not going to be retold anyway)
+  w.surfaces = ['desktop']
+  await $.turn.complete(turn('t6', { answer: 'short' }))
+  const again = await mountBand($)
+  expect(await has(again, /wait what|wait-what/)).toBe(false)
+  await again.unmount()
+})
+
+test('a subagent turn neither sets nor clears a note', ON, async ($, on) => {
+  const w = world(on)
+  w.surfaces = ['desktop']
+  await $.turn.complete(turn('t1'))
+  await $.turn.complete(turn('sub1', { agentId: 'agent-1' }))
+  const ui = await mountBand($)
+  expect(await noteLines(ui)).toEqual(['wait what: no terminal surface seen (saw: desktop)'])
+  await ui.unmount()
+})
+
+test('OFF: no note and no log, whatever happens (no terminal, a failing model)', async ($, on) => {
+  const w = world(on)
+  w.surfaces = ['desktop']
+  await $.turn.complete(turn('t1'))
+  w.surfaces = ['terminal']
+  w.mode = 'api-error'
+  await $.turn.complete(turn('t2'))
+  await w.clock.settle()
+  expect(w.modelCalls).toHaveLength(0)
+  const ui = await mountBand($)
+  expect(await has(ui, /wait what|wait-what/)).toBe(false)
+  expect(await has(ui, MARKER)).toBe(true)
+  expect(w.logs).toEqual([])
+  await ui.unmount()
+})
+
+test('a note is not drawn while a turn runs (isWorking), nor on a desktop surface, nor under a survey', ON, async ($, on) => {
+  const w = world(on)
+  w.surfaces = ['desktop']
+  await $.turn.complete(turn('t1'))
+  for (const [over, surface] of [[{ isWorking: true }, 'terminal'], [{}, 'desktop'], [{ hasSurvey: true }, 'terminal']] as const) {
+    const ui = await mountBand($, over, surface)
+    expect(await has(ui, /wait what/)).toBe(false)
+    await ui.unmount()
+  }
+})
+
+test('a narrow band: the note is cut to one line that fits, with an ellipsis', ON, async ($, on) => {
+  const w = world(on)
+  w.surfaces = ['desktop', 'mobile', 'vscode']
+  await $.turn.complete(turn('t1'))
+  const ui = await mountBand($, { bodyColumns: 40 })
+  const [line] = await noteLines(ui)
+  expect(line!.length).toBeLessThanOrEqual(40)
+  expect(line!.startsWith('wait what: no terminal')).toBe(true)
+  expect(line!.endsWith('…')).toBe(true)
+  expect(JSON.stringify(await ui.drawn())).not.toContain('"height":2')
+  await ui.unmount()
+})
+
+test('/mods says what the last outcome was under a Wait What that is ON: the note, a retell shown, the limit, a normal skip', ON, async ($, on) => {
+  const w = world(on)
+  const lastLine = async () => ((await $.command.run(slash(''))).text ?? '').split('\n').find((l, i, all) => all[i - 1]?.includes('wait-what') && l.includes('last:'))
+  expect(await lastLine()).toBeUndefined() // nothing yet
+
+  w.surfaces = ['desktop']
+  await $.turn.complete(turn('t1'))
+  expect(await lastLine()).toBe('    last: no terminal surface seen (saw: desktop)')
+
+  w.surfaces = ['terminal']
+  await $.turn.complete(turn('t2'))
+  await w.clock.settle()
+  expect(await lastLine()).toBe('    last: retell shown')
+
+  await $.turn.complete(turn('t3', { answer: 'short' }))
+  expect(await lastLine()).toBe('    last: no retell needed: the answer had 5 characters; 200 are needed')
+
+  await $.turn.complete(turn('t4', { reason: 'aborted', isAborted: true }))
+  expect(await lastLine()).toBe('    last: no retell needed: the turn ended with reason aborted')
+  await $.command.run(slash('off wait-what'))
+  expect(await lastLine()).toBeUndefined() // OFF: no `last:` line
+})
+
+test('no room in the band (budget of 1 row, taken by Token Weather): nothing is drawn for the note, and /mods still says it', ON, async ($, on) => {
+  const w = world(on)
+  w.surfaces = ['desktop']
+  await $.turn.complete(turn('t1'))
+  const ui = await mountBand($, { maxRows: 5 })
+  expect(await has(ui, /16% 160k/)).toBe(true)
+  expect(await has(ui, /wait what/)).toBe(false)
+  await ui.unmount()
+  const list = (await $.command.run(slash(''))).text ?? ''
+  expect(list).toContain('last: no terminal surface seen (saw: desktop)')
+})
+
+test('the hourly limit line stays, and has no note beside it', { options: { waitWhat: true, maxModelCallsPerHour: 0 } }, async ($, on) => {
+  const w = world(on)
+  await $.turn.complete(turn('t1'))
+  const ui = await mountBand($)
+  expect(await has(ui, 'wait-what: hourly limit reached')).toBe(true)
+  expect(await noteLines(ui)).toEqual([])
   await ui.unmount()
 })

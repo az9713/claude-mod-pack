@@ -1,8 +1,8 @@
 import { test, expect } from 'claude-code/testing'
 
 import {
-  addCall, buildAsk, callLimit, canCall, CALL_TIMEOUT_MS, DEFAULT_CALLS_PER_HOUR, fitLines, forModel, MAX_CALLS_PER_HOUR, MAX_REPLY_TOKENS, MAX_SEND_CHARS,
-  MIN_ANSWER_CHARS, MODEL, parseReply, recentCalls, WINDOW_MS,
+  addCall, buildAsk, callLimit, canCall, CALL_TIMEOUT_MS, DEFAULT_CALLS_PER_HOUR, failureNote, fitLines, fitNote, forModel, lockNote, MAX_CALLS_PER_HOUR, MAX_REPLY_TOKENS,
+  MAX_SEND_CHARS, MIN_ANSWER_CHARS, MODEL, noTerminalNote, NOTE_CLOCK, NOTE_NO_TEXT, NOTE_SURFACES_UNREADABLE, parseReply, recentCalls, tooShortText, turnEndedText, WINDOW_MS,
 } from './retell'
 import { waitWhat } from './wait-what'
 
@@ -149,8 +149,9 @@ test('fitLines: one long word with no space is split at the width; a narrow band
 const ANSWER = 'This is a long technical answer. '.repeat(10) // 330 characters
 const ctx = (over: Record<string, unknown> = {}) => ({ isSoundAllowed: false, now: 1_000_000, options: {}, isBusy: false, ...over }) as never
 const done = (over: Record<string, unknown> = {}) => ({ answer: ANSWER, durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', ...over }) as never
-const complete = (state: any, over: Record<string, unknown> = {}, hasTerminal = true, c = ctx()) =>
-  waitWhat.turnComplete?.(state, { e: done(over), context: undefined, hasTerminal }, c)
+// `surfaces` is what the dispatcher read: the terminal when `hasTerminal`, else a list without it.
+const complete = (state: any, over: Record<string, unknown> = {}, hasTerminal = true, c = ctx(), surfaces: readonly string[] | undefined = hasTerminal ? ['terminal'] : ['desktop']) =>
+  waitWhat.turnComplete?.(state, { e: done(over), context: undefined, hasTerminal, surfaces }, c)
 
 test('the feature is OFF by default and says it spends model tokens', () => {
   expect(waitWhat.defaultOn).toBe(false)
@@ -182,9 +183,9 @@ test('skip rules: no call for a short answer, a subagent, an abort, an error, a 
 })
 
 test('a skipped turn still clears what was shown and what was in flight, and keeps the hourly count', () => {
-  const state = { calls: [5], pending: 'old', lines: ['old retell'], isLimited: true }
-  expect(complete(state, { answer: 'short' })?.state).toEqual({ calls: [5] })
-  expect(complete(state, {}, true, ctx({ isBusy: true }))?.state).toEqual({ calls: [5] })
+  const state = { calls: [5], pending: 'old', lines: ['old retell'], isLimited: true, note: 'old note' }
+  expect(complete(state, { answer: 'short' })?.state).toEqual({ calls: [5], skipped: tooShortText(5) })
+  expect(complete(state, {}, true, ctx({ isBusy: true }))?.state).toEqual({ calls: [5], note: lockNote(undefined) })
 })
 
 test('the hourly cap: the call at the limit is refused, shows the limit line state, and is not recorded', () => {
@@ -207,10 +208,12 @@ test('modelDone: the reply for the pending turn is kept as clean lines; any othe
   expect(waitWhat.modelDone?.(undefined, { turnId: 't1', reply }, ctx())).toBeUndefined()
 })
 
-test('modelDone: no answer, or an answer with no text left, shows nothing and ends the wait', () => {
+test('modelDone: no answer, or an answer with no text left, ends the wait with a note and one log line', () => {
   const state = { calls: [1], pending: 't1' }
-  expect(waitWhat.modelDone?.(state, { turnId: 't1', reply: { isAnswered: false } }, ctx())?.state).toEqual({ calls: [1] })
-  expect(waitWhat.modelDone?.(state, { turnId: 't1', reply: { isAnswered: true, text: '\x1b[2J \n ' } }, ctx())?.state).toEqual({ calls: [1] })
+  const failed = waitWhat.modelDone?.(state, { turnId: 't1', reply: { isAnswered: false, reason: 'empty-reply' } }, ctx())
+  expect(failed).toEqual({ state: { calls: [1], note: 'model returned no text (empty-reply)' }, log: 'model returned no text (empty-reply)' })
+  const blank = waitWhat.modelDone?.(state, { turnId: 't1', reply: { isAnswered: true, text: '\x1b[2J \n ' } }, ctx())
+  expect(blank).toEqual({ state: { calls: [1], note: NOTE_NO_TEXT }, log: NOTE_NO_TEXT })
 })
 
 test('turn start and session end clear the retell and keep the hourly count', () => {
@@ -221,5 +224,118 @@ test('turn start and session end clear the retell and keep the hourly count', ()
 
 test('every finished main turn stores the hourly count cleaned: old calls dropped, a call from a clock set back as now', () => {
   const state = { calls: [1_000_000 - 2 * 60 * MIN, 1_000_000 - 5 * MIN, 1_000_000 + 9 * 60 * MIN] }
-  expect(complete(state, { answer: 'short' })?.state).toEqual({ calls: [1_000_000 - 5 * MIN, 1_000_000] })
+  expect((complete(state, { answer: 'short' })?.state as any)?.calls).toEqual([1_000_000 - 5 * MIN, 1_000_000])
+})
+
+// ---- why there is no retell: the notes ----
+
+// Called with the surfaces as the dispatcher read them (undefined: unreadable).
+const step = (state: any, over: Record<string, unknown> = {}, hasTerminal = true, c = ctx(), surfaces?: readonly string[]) =>
+  waitWhat.turnComplete?.(state, { e: done(over), context: undefined, hasTerminal, surfaces }, c)
+
+test('note: a terminal that is not in the list of surfaces says what the list held', () => {
+  expect(noTerminalNote(['desktop', 'mobile'])).toBe('no terminal surface seen (saw: desktop, mobile)')
+  expect(noTerminalNote([])).toBe('no terminal surface seen (saw: none)')
+  const s = step(undefined, {}, false, ctx(), ['desktop'])
+  expect(s?.ask).toBeUndefined()
+  expect(s?.state).toEqual({ calls: [], note: 'no terminal surface seen (saw: desktop)' })
+})
+
+test('note: surfaces that could not be read are told apart from a list with no terminal', () => {
+  const s = step(undefined, {}, false, ctx(), undefined)
+  expect(s?.ask).toBeUndefined()
+  expect(s?.state).toEqual({ calls: [], note: 'could not read the session surfaces' })
+  expect(NOTE_SURFACES_UNREADABLE).toBe('could not read the session surfaces')
+})
+
+test('note: a clock that cannot be read', () => {
+  const s = step(undefined, {}, true, ctx({ now: NaN }), ['terminal'])
+  expect(s?.ask).toBeUndefined()
+  expect(s?.state).toEqual({ calls: undefined, note: 'clock unreadable' })
+  expect(NOTE_CLOCK).toBe('clock unreadable')
+})
+
+test('note: the lock names its holder: a compaction, a queued prompt, an earlier call, or someone else', () => {
+  expect(lockNote('compaction')).toBe('a compaction is running')
+  expect(lockNote('prompt-submit')).toBe('a queued prompt is being sent')
+  expect(lockNote('model-call')).toBe('an earlier retell call is still running')
+  expect(lockNote(undefined)).toBe('another automatic action holds the lock')
+  const s = step({ calls: [5] }, {}, true, ctx({ isBusy: true, lock: 'compaction' }), ['terminal'])
+  expect(s?.ask).toBeUndefined()
+  expect(s?.state).toEqual({ calls: [5], note: 'a compaction is running' })
+})
+
+test('note: a failed model call says its reason; the api error adds its status and kind', () => {
+  expect(failureNote({ isAnswered: false, reason: 'api-error', status: 429, error: 'rate_limit' })).toBe('model call failed (api-error, status 429, rate_limit)')
+  expect(failureNote({ isAnswered: false, reason: 'api-error', status: null, error: 'unknown' })).toBe('model call failed (api-error, status none, unknown)')
+  expect(failureNote({ isAnswered: false, reason: 'api-error' })).toBe('model call failed (api-error)')
+  expect(failureNote({ isAnswered: false, reason: 'empty-reply' })).toBe('model returned no text (empty-reply)')
+  expect(failureNote({ isAnswered: false, reason: 'aborted' })).toBe('model call timed out or was cut (aborted)')
+  expect(failureNote({ isAnswered: false, reason: 'rejected', error: 'Error: model blocked' })).toBe('model call refused by Claude Code (rejected: Error: model blocked)')
+  // text from outside is cleaned and kept short
+  expect(failureNote({ isAnswered: false, reason: 'rejected', error: `\x1b[2J${'x'.repeat(500)}` }).length).toBeLessThanOrEqual(46 + 80 + 1) // 'model call refused by Claude Code (rejected: ' + 80 characters + ')'
+  expect(failureNote({ isAnswered: false, reason: 'rejected', error: '\x1b[2Jbad\u0007' })).toBe('model call refused by Claude Code (rejected: bad)')
+})
+
+test('note: every failed reason ends the wait with that note and the same text as the one log line', () => {
+  const state = { calls: [1], pending: 't1' }
+  for (const reply of [
+    { isAnswered: false as const, reason: 'api-error' as const, status: 500, error: 'server_error' },
+    { isAnswered: false as const, reason: 'empty-reply' as const },
+    { isAnswered: false as const, reason: 'aborted' as const },
+    { isAnswered: false as const, reason: 'rejected' as const, error: 'blocked' },
+  ]) {
+    const result = waitWhat.modelDone?.(state, { turnId: 't1', reply }, ctx())
+    expect(result?.state).toEqual({ calls: [1], note: failureNote(reply) })
+    expect(result?.log).toBe(failureNote(reply))
+  }
+  // a reply that came late is dropped: no note, no log
+  expect(waitWhat.modelDone?.(state, { turnId: 'older', reply: { isAnswered: false, reason: 'aborted' } }, ctx())).toBeUndefined()
+})
+
+test('the normal skips leave no note and no log; a subagent turn changes nothing', () => {
+  const state = { calls: [5], note: 'earlier note' }
+  const cases: [Record<string, unknown>, string][] = [
+    [{ answer: 'x'.repeat(199) }, tooShortText(199)],
+    [{ reason: 'aborted', isAborted: true }, turnEndedText('aborted')],
+    [{ reason: 'error' }, turnEndedText('error')],
+    [{ reason: 'refusal', refusal: { category: null, explanation: null } }, turnEndedText('refusal')],
+  ]
+  for (const [over, skipped] of cases) {
+    // no `note`, no `log`, no `ask`
+    expect(step(state, over, true, ctx(), ['terminal'])).toEqual({ state: { calls: [5], skipped } })
+  }
+  expect(step(state, { agentId: 'a1' }, true, ctx(), ['terminal'])).toBeUndefined()
+  expect(step(state, { agentId: 'a1' }, false, ctx({ now: NaN }), undefined)).toBeUndefined()
+})
+
+test('a long answer that gets its call has no note; a call refused by the cap has the limit flag and no note', () => {
+  const ok = step({ calls: [], note: 'old' }, {}, true, ctx(), ['terminal'])
+  expect(ok?.state).toEqual({ calls: [1_000_000], pending: 't1' })
+  const limited = step({ calls: [900_000] }, {}, true, ctx({ options: { maxModelCallsPerHour: 1 } }), ['terminal'])
+  expect(limited?.state).toEqual({ calls: [900_000], isLimited: true })
+})
+
+test('turn start clears the note and keeps the hourly count', () => {
+  expect(waitWhat.turnStart?.({ calls: [1], note: 'x', skipped: 'y' }, { e: {} as never }, ctx())?.state).toEqual({ calls: [1] })
+})
+
+test('last (for /mods): the note, else retell shown, else the limit, else the normal skip, else nothing', () => {
+  const last = (state: any) => waitWhat.last?.(state)
+  expect(last({ calls: [], note: 'clock unreadable' })).toBe('clock unreadable')
+  expect(last({ calls: [], lines: ['x'] })).toBe('retell shown')
+  expect(last({ calls: [], isLimited: true })).toBe('hourly limit reached')
+  expect(last({ calls: [], skipped: tooShortText(12) })).toBe(`no retell needed: the answer had 12 characters; ${MIN_ANSWER_CHARS} are needed`)
+  expect(last({ calls: [], pending: 't1' })).toBeUndefined()
+  expect(last(undefined)).toBeUndefined()
+})
+
+test('fitNote: one line, label first, cut with an ellipsis, never narrower than 20 cells', () => {
+  expect(fitNote('clock unreadable', 80)).toBe('wait what: clock unreadable')
+  const cut = fitNote('x'.repeat(100), 40)
+  expect(cut.length).toBe(40)
+  expect(cut.startsWith('wait what: x')).toBe(true)
+  expect(cut.endsWith('…')).toBe(true)
+  expect(fitNote('x'.repeat(100), 3).length).toBe(20)
+  expect(fitNote('x'.repeat(100), NaN).length).toBe(20)
 })

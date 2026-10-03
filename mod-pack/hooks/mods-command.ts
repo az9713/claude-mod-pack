@@ -20,7 +20,9 @@ const USAGE = [
   '  /mods reset               drop every /mods choice and use the settings again',
 ].join('\n')
 
-export const runMods = (args: string, features: readonly Listed[], overrides: Overrides, options: PluginOptions): ModsResult => {
+// `last`: what a feature says of its last outcome, by feature id (`Feature.last`). The list shows it
+// under a feature that is ON. The default is no feature saying anything.
+export const runMods = (args: string, features: readonly Listed[], overrides: Overrides, options: PluginOptions, last: Readonly<Record<string, string>> = {}): ModsResult => {
   const [verb = '', arg = '', ...rest] = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
   const unchanged = (text: string): ModsResult => ({ text, overrides, isChanged: false })
   const changed = (text: string, next: Overrides): ModsResult => ({ text, overrides: next, isChanged: true })
@@ -29,8 +31,9 @@ export const runMods = (args: string, features: readonly Listed[], overrides: Ov
   const list = () => {
     const lines = features.map(f => {
       const flags = [f.usesModel ? 'uses model tokens' : '', f.hasSound ? 'plays sound' : ''].filter(Boolean)
-      const state = isFeatureOn(f, overrides, options) ? 'ON ' : 'OFF'
-      return `  ${state}  ${f.id}  ${f.title}: ${f.about}${flags.length ? ` [${flags.join(', ')}]` : ''}`
+      const isOn = isFeatureOn(f, overrides, options)
+      const line = `  ${isOn ? 'ON ' : 'OFF'}  ${f.id}  ${f.title}: ${f.about}${flags.length ? ` [${flags.join(', ')}]` : ''}`
+      return isOn && last[f.id] ? `${line}\n    last: ${last[f.id]}` : line
     })
     return [`mod-pack features (sound: ${isSoundOn(overrides, options) ? 'ON' : 'OFF'}):`, ...lines, '', 'Type /mods help for the commands.'].join('\n')
   }

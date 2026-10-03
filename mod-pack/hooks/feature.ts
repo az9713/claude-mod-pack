@@ -53,9 +53,14 @@ export type ModelAsk = {
   effort?: ModelEffort
 }
 
-// What a model call came to. The text of a reply, or nothing: the call failed, ran out of time,
-// was cut, or the model said nothing. The reason is not passed on.
-export type ModelReply = { isAnswered: true; text: string } | { isAnswered: false }
+// What a model call came to. The text of a reply, or nothing, and then why: `api-error` (with the
+// HTTP `status`, null when no response came, and the `error` kind that Claude Code names),
+// `empty-reply` (the model sent no text), `aborted` (cut by the time limit), or `rejected` (Claude
+// Code refused to send the request at all; `error` is the short text of the refusal). These are the
+// arms of `ModelCompleteResult` plus `rejected`, which is a rejection of the call, not a result.
+export type ModelReply =
+  | { isAnswered: true; text: string }
+  | { isAnswered: false; reason: 'api-error' | 'empty-reply' | 'aborted' | 'rejected'; status?: number | null; error?: string }
 
 // What a callback returns. Both fields are optional; returning nothing changes nothing.
 export type Step<S> = {
@@ -67,6 +72,9 @@ export type Step<S> = {
   sound?: string
   // A line for `$.ui.toast`. The dispatcher shows it.
   toast?: string
+  // A line for `$.ui.log`, the transcript log. The dispatcher writes it as `mod-pack: <id>: <log>`.
+  // For a fact worth finding later when the band is clipped, not for every turn.
+  log?: string
   // A model call to make. Only when `ctx.isBusy` was false: the dispatcher takes the lock in
   // the same moment, with no wait in between. The result comes to `modelDone`.
   ask?: ModelAsk
@@ -96,8 +104,10 @@ export type Feature<S = unknown> = {
   // `state` is the feature's own earlier state, undefined before its first step.
   // `context` is the engine's reading of the context window; undefined when it could not be read.
   // `hasTerminal` is true when the session draws on a terminal now. A mod that spends tokens for
-  // a row that only the terminal draws must check it.
-  turnComplete?: (state: S | undefined, input: { e: TurnCompleteInput; context: SessionContextUsage | undefined; hasTerminal: boolean }, ctx: FeatureContext) => Step<S> | undefined
+  // a row that only the terminal draws must check it. `surfaces` is the list that it was read from:
+  // undefined when `$.session.surfaces()` rejected (then `hasTerminal` is false as well), so that a
+  // list with no terminal in it and a list that could not be read are told apart.
+  turnComplete?: (state: S | undefined, input: { e: TurnCompleteInput; context: SessionContextUsage | undefined; hasTerminal: boolean; surfaces?: readonly string[] }, ctx: FeatureContext) => Step<S> | undefined
   turnStart?: (state: S | undefined, input: { e: TurnStartInput }, ctx: FeatureContext) => Step<S> | undefined
   sessionStart?: (state: S | undefined, input: { e: SessionStartInput }, ctx: FeatureContext) => Step<S> | undefined
   // The session ends: exit, or /clear (which raises no `session.start` after it).
@@ -124,6 +134,9 @@ export type Feature<S = unknown> = {
   // asks it only after `band` returned a row. When fewer rows are left in the budget, the row
   // is clipped to the rows left (its first lines show).
   bandLines?: (state: S | undefined, e: BandInput) => number
+  // One short line for `/mods`, shown under the feature while it is ON: what its last outcome was,
+  // or undefined for nothing to say. Needed when the band cannot show it (no room, or nothing drawn).
+  last?: (state: S | undefined) => string | undefined
 }
 
 export type BandInput = { props: RenderPropsOf['AbovePrompt']; now: number; options: PluginOptions; isCompacting: boolean }

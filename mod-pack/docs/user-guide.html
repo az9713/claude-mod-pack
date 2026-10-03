@@ -35,8 +35,8 @@ footer{margin-top:48px;border-top:1px solid var(--line);padding-top:14px;font-si
 <body>
 <header><div class="wrap">
 <h1>mod-pack <span>User Guide</span>: Test Steps</h1>
-<p>How to load <code>mod-pack</code> into a running Claude Code session and test its six mods, Token Weather, Blast Radius, Cache Keeper, Wait What, Prompt Queue and Snake, in 77 steps. You do not need to exit the session.</p>
-<p class="muted">Version 0.1.0. Written 2026-10-02, extended 2026-10-03. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 77 below are the first on-screen check. Wait What (steps 28 to 41) spends model tokens: read its warning first. Prompt Queue (steps 42 to 56) sends real prompts by itself: read its warning first. Snake (steps 57 to 77) pauses and resumes by itself while Claude works: read its notes first.</p>
+<p>How to load <code>mod-pack</code> into a running Claude Code session and test its six mods, Token Weather, Blast Radius, Cache Keeper, Wait What, Prompt Queue and Snake, in 85 steps. You do not need to exit the session.</p>
+<p class="muted">Version 0.1.0. Written 2026-10-02, extended 2026-10-03. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 85 below are the first on-screen check. Wait What (steps 28 to 41, and 78 to 85 for the notes that say why no retell shows) spends model tokens: read its warning first. Prompt Queue (steps 42 to 56) sends real prompts by itself: read its warning first. Snake (steps 57 to 77) pauses and resumes by itself while Claude works: read its notes first.</p>
 </div></header>
 <div class="wrap">
 
@@ -164,7 +164,8 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <tr><th>Part</th><th>Meaning</th></tr>
 <tr><td>wait what: ...</td><td>The model's retell of the last answer. 1 or 2 lines. A line that does not fit the width ends with <code>…</code>.</td></tr>
 <tr><td>wait-what: hourly limit reached</td><td>The answer was long enough, but the hourly limit refused the call, so nothing was sent. The line shows until your next prompt.</td></tr>
-<tr><td>nothing</td><td>The answer was shorter than 200 characters, or Claude's turn was interrupted, or the call failed, or it is still running. A failed call shows nothing and still counts toward the limit.</td></tr>
+<tr><td>wait what: &lt;note&gt;</td><td>A long answer got no retell, and the note gives the reason, for example a failed call. A failed call still counts toward the limit. See section 9.</td></tr>
+<tr><td>nothing</td><td>The answer was shorter than 200 characters, or Claude's turn was interrupted, or the call is still running. Type <code>/mods</code> and read the <code>last:</code> line under <code>wait-what</code> (steps 78 to 85).</td></tr>
 </table>
 <p class="muted">The next prompt, <code>/clear</code> and the end of the session cancel a call that is still running. <code>/mods off wait-what</code> lets a running call end (15 seconds at most) and drops its reply.</p>
 
@@ -241,7 +242,39 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 </table>
 <p class="muted">The keys: <code>w</code> up, <code>a</code> left, <code>s</code> down, <code>d</code> right, <code>p</code> play and pause, <code>r</code> new game, Esc closes the pane. A turn of 180 degrees is dropped, and at most 2 turns wait for the next tick. Clicking a key label in the pane works as well. All keys are letters.</p>
 
-<h2>9. What these tests cannot show</h2>
+<h2>9. Find out why Wait What shows no retell (steps 78 to 85)</h2>
+<p>After a long answer, Wait What draws either a retell or one dim line, <code>wait what: &lt;note&gt;</code>, that gives the reason for no retell. The command <code>/mods</code> shows the same reason under the <code>wait-what</code> line, as <code>last: ...</code>, also when the band has no room. Use these steps when a long answer gets no retell. Wait What must be ON (step 30). The steps use about 4 retold answers.</p>
+<table>
+<tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
+<tr><td>78</td><td>Send the prompt of step 29 and wait for the answer. Type <code>/mods</code>.</td><td>Under the <code>wait-what</code> line there is a line <code>    last: retell shown</code> when the retell is in the band. When there is no retell, the band shows a dim line <code>wait what: &lt;note&gt;</code> and the <code>last:</code> line holds the same note. Write down the exact text.</td></tr>
+<tr><td>79</td><td>Send <code>Reply with only the word ok.</code> Type <code>/mods</code>.</td><td>The band has no <code>wait what:</code> line. The <code>last:</code> line reads <code>no retell needed: the answer had 2 characters; 200 are needed</code> (the number is the length of the answer).</td></tr>
+<tr><td>80</td><td>Send the prompt of step 29 and press Esc while Claude is still writing. Type <code>/mods</code>.</td><td>The band has no <code>wait what:</code> line. The <code>last:</code> line reads <code>no retell needed: the turn ended with reason aborted</code>.</td></tr>
+<tr><td>81</td><td>Send the prompt of step 29. When no retell shows after 20 seconds, look at the dim line in the band, then type <code>/mods</code>.</td><td>The band shows one dim line <code>wait what: &lt;note&gt;</code>. Compare it with the table below. Send the exact text of the note, and the text of the <code>last:</code> line, in your report.</td></tr>
+<tr><td>82</td><td>When the note starts with <code>model call</code> or <code>model returned</code>, look in the transcript for a dim line that starts with <code>mod-pack: wait-what:</code>.</td><td>One line with the same text as the note. It stays when the band is too narrow or too short to show the note.</td></tr>
+<tr><td>83</td><td>After a note shows, send any new prompt.</td><td>The note goes when the turn starts. A later answer that is retold replaces it.</td></tr>
+<tr><td>84</td><td>Make the terminal window short, as in step 36, until the Wait What row of step 31 does not show, then repeat step 81.</td><td>The band can have no room for the note line. The <code>last:</code> line of <code>/mods</code> still gives the reason.</td></tr>
+<tr><td>85</td><td>Type <code>/mods off wait-what</code>, send the prompt of step 29, and type <code>/mods</code>.</td><td>The band has no <code>wait what:</code> line. The <code>wait-what</code> line has no <code>last:</code> line under it.</td></tr>
+</table>
+<h3>How to read the notes</h3>
+<table>
+<tr><th>Note</th><th>Meaning and what to do</th></tr>
+<tr><td>no terminal surface seen (saw: ...)</td><td>The engine listed its surfaces and the terminal was not among them. The names after <code>saw:</code> are the list. No model call was made. Send the full text of the note in your report.</td></tr>
+<tr><td>could not read the session surfaces</td><td>The engine refused to list its surfaces. No model call was made. Send a new prompt. When the note comes back each time, report it.</td></tr>
+<tr><td>clock unreadable</td><td>The engine gave no time, so the hourly count cannot be kept. No model call was made. When the note comes back each time, report it.</td></tr>
+<tr><td>a compaction is running</td><td>A compaction held the shared lock when the answer ended. No call was made and none was counted. Ask again after the compaction ends.</td></tr>
+<tr><td>a queued prompt is being sent</td><td>The Prompt Queue held the lock. The answer to the queued prompt is retold. No action is needed.</td></tr>
+<tr><td>an earlier retell call is still running</td><td>A call for an earlier answer had not ended (15 seconds at most). Ask again after a few seconds.</td></tr>
+<tr><td>another automatic action holds the lock</td><td>An unnamed holder held the lock. Report it, with what was running.</td></tr>
+<tr><td>model call failed (api-error, status N, kind)</td><td>The API answered with an error. <code>N</code> is the HTTP status, <code>none</code> when no response came. <code>kind</code> is the error kind, for example <code>rate_limit</code>, <code>overloaded</code> or <code>authentication_failed</code>. Wait and ask again for the first two. For <code>authentication_failed</code>, check the login of Claude Code. The call counted toward the hourly limit.</td></tr>
+<tr><td>model returned no text (empty-reply)</td><td>The model answered with no text. Ask again. When it repeats, report it.</td></tr>
+<tr><td>model call timed out or was cut (aborted)</td><td>The call ran past 15 seconds, or Claude Code cut it. Ask again.</td></tr>
+<tr><td>model call refused by Claude Code (rejected: ...)</td><td>Claude Code refused to send the request, for example because the <code>haiku</code> alias is not allowed. The text after <code>rejected:</code> is from Claude Code. Check that your plan allows the <code>haiku</code> alias.</td></tr>
+<tr><td>reply had no printable text</td><td>The model answered, and nothing was left after the reply was cleaned. Ask again.</td></tr>
+<tr><td>wait-what: hourly limit reached</td><td>The hourly limit refused the call (step 38).</td></tr>
+</table>
+<p class="muted">A short answer (under 200 characters), a subagent's turn, and a turn that was interrupted, failed or refused draw no note in the band. Only <code>/mods</code> gives the reason for them (steps 79 and 80). When the <code>wait-what</code> line has no <code>last:</code> line after a long answer, no outcome is stored: no main turn finished since your last prompt, the call is still running, or the <code>turn.complete</code> hook was not reached. Report that case too.</p>
+
+<h2>10. What these tests cannot show</h2>
 <ul>
 <li><b>Storm and Compact soon colors.</b> A 1M window needs 750k tokens to reach Storm, which costs too much for a test.</li>
 <li><b>Sound.</b> Only macOS plays plugin sound, so Windows and Linux are silent.</li>
@@ -251,6 +284,7 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <li><b>Dialog order.</b> The type documentation says the Blast Radius dialog comes before Claude's own permission prompt. It has not been observed.</li>
 <li><b>What Wait What costs.</b> Nobody measured a call. The size of a retell call is an estimate (about 1,000 tokens in at most, 120 out at most). Check your own usage view after the steps.</li>
 <li><b>That the retell stays out of the transcript.</b> The type declarations say the call has no history and the plugin adds nothing to the conversation. Look at the transcript after step 31: no retell should be in it.</li>
+<li><b>The notes of Wait What on a real screen.</b> They were tested with stand-ins for the engine only. Which surfaces a real terminal session lists, what a real model error looks like, and whether the note is readable at your width were not seen. Steps 78 to 85 are the first check.</li>
 <li><b>Wait What beside the real next-steps plugin.</b> Both can run after the same answer, each with its own call. Step 31 is the first check of the two together.</li>
 <li><b>The row heights.</b> The terminal heights at which Wait What shows 2 lines, 1 line or none were not measured (step 36).</li>
 <li><b>That <code>/q</code> runs while a turn runs.</b> The plugin registers it as an <code>immediate</code> command, which the type declarations say runs at once in a running turn. Step 44 is the first real check. If it waits for the turn to end, the queue still works, but a prompt typed in the last second of a turn is not queued in time.</li>
@@ -267,12 +301,12 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <li><b>The high score across sessions and a hot reload.</b> The high score is read from the plugin store when you open the pane. A reload of the plugin drops the game's timer. The game then waits until the next prompt or key press. The steps run neither.</li>
 </ul>
 
-<h2>10. Undo</h2>
+<h2>11. Undo</h2>
 <pre><code>Remove-Item -Recurse "$w\mod-pack"
 # restore the old mod, if you moved one:
 Move-Item "C:\Users\&lt;you&gt;\.claude\dev-mods-disabled\token-weather-old" "$w\token-weather"</code></pre>
 
-<h2>11. What to report</h2>
+<h2>12. What to report</h2>
 <p>Send the number of any step whose result differs from the expected result. Add a screenshot or the text you see, and any dim line in the transcript that names <code>mod-pack</code>.</p>
 
 <footer>mod-pack 0.1.0 · MIT license · A mod is code that runs with your permissions. Run <code>claude plugin validate</code> on any mod before you install it.</footer>
