@@ -35,8 +35,8 @@ footer{margin-top:48px;border-top:1px solid var(--line);padding-top:14px;font-si
 <body>
 <header><div class="wrap">
 <h1>mod-pack <span>User Guide</span>: Test Steps</h1>
-<p>How to load <code>mod-pack</code> into a running Claude Code session and test its four mods, Token Weather, Blast Radius, Cache Keeper and Wait What, in 41 steps. You do not need to exit the session.</p>
-<p class="muted">Version 0.1.0. Written 2026-10-02, extended 2026-10-03. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 41 below are the first on-screen check. Wait What (steps 28 to 41) spends model tokens: read its warning first.</p>
+<p>How to load <code>mod-pack</code> into a running Claude Code session and test its five mods, Token Weather, Blast Radius, Cache Keeper, Wait What and Prompt Queue, in 56 steps. You do not need to exit the session.</p>
+<p class="muted">Version 0.1.0. Written 2026-10-02, extended 2026-10-03. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 56 below are the first on-screen check. Wait What (steps 28 to 41) spends model tokens: read its warning first. Prompt Queue (steps 42 to 56) sends real prompts by itself: read its warning first.</p>
 </div></header>
 <div class="wrap">
 
@@ -168,7 +168,38 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 </table>
 <p class="muted">The next prompt, <code>/clear</code> and the end of the session cancel a call that is still running. <code>/mods off wait-what</code> lets a running call end (15 seconds at most) and drops its reply.</p>
 
-<h2>7. What these tests cannot show</h2>
+<h2>7. Test Prompt Queue (steps 42 to 56)</h2>
+<p>Prompt Queue lets you type <code>/q &lt;text&gt;</code> while Claude works, to stack follow-up prompts. They are sent one at a time, each when the turn before it ends. A row above the prompt shows what waits. From this mod on, <code>/mods</code> lists five mods: <code>token-weather</code>, <code>cache-keeper</code>, <code>prompt-queue</code>, <code>wait-what</code> and <code>blast-radius</code>.</p>
+<div class="note warn"><b>Queued prompts run with your permissions, and they send by themselves.</b> When a turn ends, the next queued prompt goes to Claude as if you had typed it at that moment. In steps 42 to 56 queue only harmless prompts, such as <code>Say the word one.</code>. Do not queue a prompt that edits files, runs commands or sends data. In a real session, read the queue (<code>/q</code>) before you walk away from it. The mod itself spends no model tokens: each sent prompt is a normal turn of your session, on your plan. If you interrupt a turn with Esc, the queue pauses and sends nothing until you type <code>/q resume</code>.</div>
+<div class="note"><b>A slow prompt for the steps.</b> Steps 44, 48 and 51 need a turn that lasts about 20 seconds, so you have time to type. Use <code>Use the Bash tool to run exactly: sleep 20</code>. If your Claude Code asks for permission to run it, allow it. The row of the queue is also drawn while Claude works. Cache Keeper's row is not: it shows only after an answer.</div>
+<table>
+<tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
+<tr><td>42</td><td>Type <code>/mods</code>.</td><td>A line <code>ON  prompt-queue  Prompt Queue: type /q &lt;text&gt; while Claude works ...</code> with no <code>[uses model tokens]</code> flag.</td></tr>
+<tr><td>43</td><td>Type <code>/q</code> with nothing after it.</td><td><code>The prompt queue is empty. Type /q &lt;text&gt; to add a prompt.</code> No row above the prompt.</td></tr>
+<tr><td>44</td><td>Send the slow prompt (<code>Use the Bash tool to run exactly: sleep 20</code>). While Claude works, type <code>/q Say the word one.</code>, then <code>/q Say the word two.</code></td><td>Each <code>/q</code> answers at once, while the turn still runs: <code>Queued 1 of 20: "Say the word one.". It sends when the running turn ends.</code>, then <code>Queued 2 of 20</code>. A row appears above the prompt: <code>queue (2): 1 Say the word one. · 2 Say the word two.</code> (cut to your width). If the <code>/q</code> waits until the turn ends instead of answering at once, report it: the command is not running mid-turn.</td></tr>
+<tr><td>45</td><td>Type <code>/q</code>, then <code>/q rm 2</code>, then <code>/q</code> again.</td><td>The first list shows 2 numbered prompts, then <code>Removed 2: "Say the word two.".</code>, then a list of 1. The row shows <code>queue (1): 1 Say the word one.</code>.</td></tr>
+<tr><td>46</td><td>Wait for the slow turn to end.</td><td>The queued prompt is sent by itself, once, not twice. Claude answers <code>one</code>. The row is gone. The declared API says the transcript row names the plugin (mod-pack) as the sender, and that Claude reads the text bare, as if you typed it. Report what you see, in particular if the row does not name the plugin, or if Claude treats the text as a message from a plugin.</td></tr>
+<tr><td>47</td><td>Send the slow prompt again. Queue <code>/q Say the word one.</code> and <code>/q Say the word two.</code>. Then type <code>/q clear</code>. Wait for the turn to end.</td><td><code>Cleared 2 queued prompts.</code> The row goes. When the turn ends, nothing is sent.</td></tr>
+<tr><td>48</td><td>Send the slow prompt again. Queue the two prompts of step 47. While Claude works, press Esc to interrupt the turn.</td><td>The turn stops. Nothing is sent. A toast <code>Prompt Queue paused: you interrupted the turn. Type /q resume to send.</code> shows. The row, in yellow: <code>queue paused (2): you interrupted the turn · /q resume sends · /q clear drops</code>.</td></tr>
+<tr><td>49</td><td>Send <code>Say the word ok.</code> and wait for the answer.</td><td>The queue stays paused. Nothing is sent.</td></tr>
+<tr><td>50</td><td>Type <code>/q resume</code>.</td><td><code>Resumed. Claude is not working, so it sends now: ...</code> The first prompt is sent at once and answered. The second is sent when that turn ends. The row goes after the second is sent.</td></tr>
+<tr><td>51</td><td>Send the slow prompt. Queue <code>/q Say the word one.</code>. Then type <code>/q pause</code>. Wait for the turn to end.</td><td><code>The queue is paused. Type /q resume to send again.</code> When the turn ends, nothing is sent and the row says <code>queue paused (1): paused with /q pause ...</code>. Type <code>/q resume</code>: the prompt is sent at once.</td></tr>
+<tr><td>52</td><td>With no turn running and the queue empty, type <code>/q Say the word now.</code></td><td><code>Queued 1 of 20: "Say the word now.". Claude is not working, so it sends now: ...</code> The prompt is sent at once and answered.</td></tr>
+<tr><td>53</td><td>Optional, depends on timing. Type <code>/compact</code>. While it runs, type <code>/q Say the word ok.</code></td><td>Either <code>A compaction is running, so nothing is sent yet. Type /q resume when it ends.</code> (then, after the compaction, <code>/q resume</code> sends the prompt), or the compaction had already ended and the prompt is sent at once. Both are correct. The queue never sends while a compaction runs.</td></tr>
+<tr><td>54</td><td>Send the slow prompt. Queue one prompt. Type <code>/mods off prompt-queue</code>.</td><td>The row goes at once. <code>/q anything</code> now says <code>prompt-queue is OFF. Nothing is queued and nothing is sent.</code> When the turn ends, nothing is sent. Type <code>/mods on prompt-queue</code>, then <code>/q</code>: the queue is empty (the prompt queued before was dropped when the mod was switched off).</td></tr>
+<tr><td>55</td><td>Send the slow prompt. Queue one prompt. Type <code>/clear</code>.</td><td>The queue is empty after <code>/clear</code> (type <code>/q</code> to check). Nothing is sent.</td></tr>
+<tr><td>56</td><td>Send the slow prompt. Queue 4 prompts with long texts. Look at the band while Claude works, in a wide terminal and then in a narrow one. After the answer, look again.</td><td>The queue row stays while Claude works and is cut to the width, ending with <code>· …</code> when prompts are left out. After the answer, the Token Weather row, the Cache Keeper row and the queue row show together, in that order, below the <code>next:</code> suggestions if installed. A short terminal shows fewer rows: Token Weather first, then Cache Keeper, then the queue.</td></tr>
+</table>
+<h3>How to read the queue row</h3>
+<table>
+<tr><th>Part</th><th>Meaning</th></tr>
+<tr><td>queue (3): 1 fix tests · 2 update docs · …</td><td>3 prompts wait. Each one is cut to 24 characters. The numbers are what <code>/q rm &lt;n&gt;</code> takes. <code>· …</code> means more prompts follow than the width shows.</td></tr>
+<tr><td>queue paused (3): ...</td><td>Nothing is sent. The reason is shown: you interrupted a turn, a turn ended with an error or a refusal, you typed <code>/q pause</code>, or Claude Code did not accept the last prompt. <code>/q resume</code> sends again, <code>/q clear</code> drops the prompts.</td></tr>
+<tr><td>nothing</td><td>The queue is empty, or the mod is off.</td></tr>
+</table>
+<p class="muted">The commands: <code>/q &lt;text&gt;</code> adds a prompt (at most 20 prompts, 2000 characters each). <code>/q</code> or <code>/q list</code> lists them. <code>/q rm &lt;n&gt;</code> removes one. <code>/q clear</code> removes all. <code>/q pause</code> and <code>/q resume</code> stop and start the sending. <code>/q add &lt;text&gt;</code> queues a text that starts with a command word. Only these exact forms are commands: <code>/q rm the old files</code> queues that sentence.</p>
+
+<h2>8. What these tests cannot show</h2>
 <ul>
 <li><b>Storm and Compact soon colors.</b> A 1M window needs 750k tokens to reach Storm. There is no cheap way to get there in a test.</li>
 <li><b>Sound.</b> It is silent on Windows and Linux. Only macOS plays plugin sound.</li>
@@ -180,14 +211,19 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <li><b>That the retell stays out of the transcript.</b> The type declarations say the call has no history and the plugin adds nothing to the conversation. Look at the transcript after step 31: no retell should be in it.</li>
 <li><b>Wait What beside the real next-steps plugin.</b> Both can run after the same answer, each with its own call. Step 31 is the first check of the two together.</li>
 <li><b>The row heights.</b> The terminal heights at which Wait What shows 2 lines, 1 line or none were not measured (step 36).</li>
+<li><b>That <code>/q</code> runs while a turn runs.</b> The plugin registers it as an <code>immediate</code> command, which the type declarations say runs at once in a running turn. Step 44 is the first real check. If it waits for the turn to end, the queue still works, but a prompt typed in the last second of a turn is not queued in time.</li>
+<li><b>How a sent prompt looks.</b> It is sent with <code>asUser</code>: the type declarations say Claude reads it bare, as your own words, and that the transcript still names the plugin as the sender. Step 46 is the first look. <code>@file</code> mentions and pasted images are not expanded in a queued prompt. Whether a queued text that starts with <code>/</code> runs as a command was not checked: it is sent as text.</li>
+<li><b>Your own prompts and the queue.</b> If you type a normal prompt while Claude works, Claude Code holds it itself. Then both your held prompt and the next queued prompt wait for the end of the turn. The order between them was not checked.</li>
+<li><b>A draft in the prompt box.</b> What happens to text you have typed but not sent when the queue sends a prompt was not checked.</li>
+<li><b>Dialogs.</b> The type declarations give no way to see whether a question dialog is open. A Blast Radius dialog belongs to a tool call inside a turn, so no turn ends while one is open and the queue sends nothing then. A dialog from another plugin that opens between turns could be open when the queue sends. It was not tested.</li>
 </ul>
 
-<h2>8. Undo</h2>
+<h2>9. Undo</h2>
 <pre><code>Remove-Item -Recurse "$w\mod-pack"
 # restore the old mod, if you moved one:
 Move-Item "C:\Users\&lt;you&gt;\.claude\dev-mods-disabled\token-weather-old" "$w\token-weather"</code></pre>
 
-<h2>9. What to report</h2>
+<h2>10. What to report</h2>
 <p>Send the number of any step whose result differs from the expected result. Add a screenshot or the text you see, and any dim line in the transcript that names <code>mod-pack</code>.</p>
 
 <footer>mod-pack 0.1.0 · MIT license · A mod is code that runs with your permissions. Run <code>claude plugin validate</code> on any mod before you install it.</footer>

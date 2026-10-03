@@ -11,9 +11,14 @@ export type ModPackCacheClock = { at?: number; tokens?: number; isWorking?: bool
 // call is in flight, and the retell lines to show (1 or 2). `isLimited`: the cap refused the last call.
 export type ModPackRetell = { calls?: number[]; pending?: string; lines?: string[]; isLimited?: boolean }
 
+// Prompt Queue: the prompts waiting (first to send first), why the queue is paused (if it is), whether a
+// turn of the main conversation runs, and the turn that last sent a prompt (it never sends twice).
+export type ModPackQueue = { items?: string[]; pause?: 'user' | 'aborted' | 'error' | 'refusal' | 'send-failed'; isWorking?: boolean; sentFor?: string }
+
 export type ModPackFeatureStates = {
   'token-weather'?: ModPackSample[]
   'cache-keeper'?: ModPackCacheClock
+  'prompt-queue'?: ModPackQueue
   'wait-what'?: ModPackRetell
 }
 

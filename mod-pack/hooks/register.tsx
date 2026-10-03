@@ -17,21 +17,25 @@ import {
 } from './blast-radius'
 import type { GitOut, PathFact, Risk } from './blast-radius'
 import { cacheKeeper } from './cache-keeper'
-import type { Feature, FeatureContext, ModelAsk, ModelReply, Step } from './feature'
+import type { Feature, FeatureContext, Lock, ModelAsk, ModelReply, Step } from './feature'
 import { runMods } from './mods-command'
-import { isFeatureOn, isSoundAllowed, isSoundOn, MAX_ROW_LINES, parseOverrides, rowBudget, STORE_KEY } from './settings'
+import { promptQueue } from './prompt-queue'
+import { runQ } from './queue'
+import type { Queue } from './queue'
+import { isFeatureOn, isSoundAllowed, isSoundOn, layoutRows, parseOverrides, rowBudget, STORE_KEY } from './settings'
 import { tokenWeather } from './token-weather'
 import { waitWhat } from './wait-what'
 import type { ModPackFeatureStates } from '../types'
 
-// The order is the row order in the band. Blast Radius draws no row.
-const FEATURES: readonly Feature[] = [tokenWeather, cacheKeeper, waitWhat, blastRadius]
+// The order is the row order in the band. Blast Radius draws no row. Prompt Queue stands before
+// Wait What on purpose: its row is 1 line and must not be starved by a 2-line retell.
+const FEATURES: readonly Feature[] = [tokenWeather, cacheKeeper, promptQueue, waitWhat, blastRadius]
 
 // Every feature's state, by feature id.
 const featureStates = atom({ plugin: 'mod-pack', key: 'features' } as const, {} as ModPackFeatureStates)
 
-// `isBusy` is added by `dispatch`, at the moment of the call.
-type Active = { feature: Feature; ctx: Omit<FeatureContext, 'isBusy'> }[]
+// `isBusy` and `lock` are added by `dispatch`, at the moment of the call.
+type Active = { feature: Feature; ctx: Omit<FeatureContext, 'isBusy' | 'lock'> }[]
 
 // The features that are ON now, each with what it may do. Read at call time,
 // so a /mods change applies at once, with no reload.
@@ -47,46 +51,80 @@ async function active($: EngineInterface, options: PluginOptions): Promise<Activ
 
 // Runs `call` on each feature that is ON (or only on the one named by `only`), keeps the state
 // it returns, shows the toast it asks for, plays the sound it asks for when sound is allowed, and
-// starts the model call it asks for. One feature failing never stops the others.
+// starts the model call it asks for, and sends the prompt it asks for. One feature failing never
+// stops the others.
 async function dispatch($: EngineInterface, options: PluginOptions, call: (feature: Feature, state: unknown, ctx: FeatureContext) => Step<unknown> | undefined, only?: string) {
   for (const { feature, ctx } of await active($, options)) {
     if (only !== undefined && feature.id !== only) continue
-    let stop: AbortController | undefined
-    try {
-      const states: Record<string, unknown> = await read($, featureStates)
-      // `isBusy` is read here, in the same moment as the call, and the lock for a model call is
-      // taken in the same moment as its answer: nothing can take the lock in between.
-      const step = call(feature, states[feature.id], { ...ctx, isBusy: busyWith !== undefined })
-      if (step?.ask) stop = beginAsk()
-      if (step?.state !== undefined) {
-        const state = step.state
-        await update($, featureStates, all => ({ ...all, [feature.id]: state }))
-      }
-      if (step?.toast) $.ui.toast(step.toast)
-      if (step?.sound && ctx.isSoundAllowed) void $.audio.play({ asset: step.sound }).catch(() => undefined)
-      if (step?.ask && stop) {
-        // Detached: the event that raised this call never waits for the model.
-        void runAsk($, options, feature, step.ask, stop)
-        stop = undefined
-      }
-    } catch (error) {
-      if (stop) releaseAsk(stop)
-      $.ui.log(`mod-pack: ${feature.id} failed: ${String(error)}`)
-    }
+    // A feature that a command also changes (`/q`) runs one call at a time, in the order they came.
+    if (feature.isSerial) await inOrder(() => dispatchOne($, options, feature, ctx, call))
+    else await dispatchOne($, options, feature, ctx, call)
   }
+}
+
+async function dispatchOne($: EngineInterface, options: PluginOptions, feature: Feature, ctx: Active[number]['ctx'], call: (feature: Feature, state: unknown, ctx: FeatureContext) => Step<unknown> | undefined) {
+  let stop: AbortController | undefined
+  let sending: object | undefined
+  try {
+    const states: Record<string, unknown> = await read($, featureStates)
+    // `isBusy` and `lock` are read here, in the same moment as the call, and the lock for a model call
+    // or a prompt is taken in the same moment as its answer: nothing can take the lock in between.
+    const step = call(feature, states[feature.id], { ...ctx, isBusy: busyWith !== undefined, lock: busyWith })
+    if (step?.ask) stop = beginAsk()
+    if (step?.submit !== undefined) {
+      sending = beginSubmit()
+      // The feature read the lock a moment ago, so this cannot happen. If it does, nothing is
+      // changed and nothing is sent: the prompt stays where it was.
+      if (!sending) return $.ui.log(`mod-pack: ${feature.id} did not send: the lock is held`)
+    }
+    if (step?.state !== undefined) {
+      const state = step.state
+      await update($, featureStates, all => ({ ...all, [feature.id]: state }))
+    }
+    if (step?.toast) $.ui.toast(step.toast)
+    if (step?.sound && ctx.isSoundAllowed) void $.audio.play({ asset: step.sound }).catch(() => undefined)
+    if (step?.ask && stop) {
+      // Detached: the event that raised this call never waits for the model.
+      void runAsk($, options, feature, step.ask, stop)
+      stop = undefined
+    }
+    if (step?.submit !== undefined && sending) {
+      // Detached: `$.prompt.submit` resolves when the new turn starts, and a hook that waits for it
+      // inside `turn.complete` would wait for ever.
+      void runSubmit($, options, feature, step.submit, sending)
+      sending = undefined
+      $.ui.invalidate('ui.render')
+    }
+  } catch (error) {
+    if (stop) releaseAsk(stop)
+    if (sending) releaseSubmit(sending)
+    $.ui.log(`mod-pack: ${feature.id} failed: ${String(error)}`)
+  }
+}
+
+// Runs the jobs of `inOrder` one after the other. Plain module state: a hot reload drops it.
+let orderTail: Promise<unknown> = Promise.resolve()
+function inOrder<T>(job: () => Promise<T>): Promise<T> {
+  const run = orderTail.then(job, job)
+  orderTail = run.catch(() => undefined)
+  return run
 }
 
 // ---- The shared automation lock ----------------------------------------------------
 // Only ONE automatic action runs at a time: a compaction, a model call of a mod (Wait What),
-// and (a later mod) an automatic prompt submission. `busyWith` names the holder, or is
+// and an automatic prompt submission (Prompt Queue). `busyWith` names the holder, or is
 // undefined when free. It is plain module state on purpose: a hot reload drops it together
 // with the running work and the timers, so it cannot stay set. A mod that sends prompts or
-// calls a model by itself must check it first (`ctx.isBusy`).
+// calls a model by itself must check it first (`ctx.isBusy`, and `ctx.lock` for who holds it).
 //
-// A compaction always takes the lock, even from a model call: the engine's own compaction
-// cannot be refused, and the model call is a short side request with no history, so the two
-// do not disturb each other. The model call then no longer holds the lock, and must not free it.
-let busyWith: 'compaction' | 'model-call' | undefined
+// A compaction always takes the lock, even from a model call or a prompt on its way: the engine's
+// own compaction cannot be refused, and the model call is a short side request with no history, so
+// the two do not disturb each other. The call then no longer holds the lock, and must not free it.
+//
+// Which holders block the Prompt Queue: a compaction, and another prompt of the queue that is still
+// on its way. A model call does not: the queue's prompt starts a turn, a new turn cancels the call
+// anyway, and `beginSubmit` cancels it at once and takes the lock.
+let busyWith: Lock | undefined
 
 // ---- Model calls (Wait What) ---------------------------------------------------------
 // At most ONE model call of a mod is in flight. `askStop` is its AbortController, and also the
@@ -116,6 +154,61 @@ function cancelAsk() {
   if (!stop) return
   stop.abort()
   releaseAsk(stop)
+}
+
+// ---- Prompt submissions (Prompt Queue) ----------------------------------------------
+// At most ONE queued prompt is on its way. `submitOwner` is its token, and the proof of who owns the
+// lock: only the owner frees it. The lock is held from the decision to send until the prompt's turn
+// starts (`turn.start`), the call settles, the session ends, or SUBMIT_LOCK_MS has passed.
+let submitOwner: object | undefined
+const SUBMIT_LOCK_MS = 30_000
+
+// Takes the lock for a prompt. Undefined when a compaction or another prompt holds it. A model call
+// of a mod does not stop it: the call is cancelled here, and its reply is dropped.
+function beginSubmit(): object | undefined {
+  if (busyWith === 'compaction' || busyWith === 'prompt-submit') return undefined
+  cancelAsk()
+  busyWith = 'prompt-submit'
+  submitOwner = {}
+  return submitOwner
+}
+
+// Frees the lock if `owner` still owns it. With no `owner`: whoever owns it (a turn started, or the
+// session ended). A compaction that took the lock over is not freed: the holder is checked.
+function releaseSubmit(owner?: object) {
+  if (owner !== undefined && submitOwner !== owner) return
+  submitOwner = undefined
+  if (busyWith === 'prompt-submit') busyWith = undefined
+}
+
+// Sends one prompt for a feature, as the person's own words. It is called with `void`, so it never
+// throws. The call resolves when the new turn starts (or the prompt is queued behind a running one),
+// and a hook may answer it with `{ drop }`. A drop and a rejection both go back to the feature.
+async function runSubmit($: EngineInterface, options: PluginOptions, feature: Feature, text: string, owner: object) {
+  // If the call never settles, the lock is not held for ever.
+  const guard = $.clock.after(SUBMIT_LOCK_MS, () => releaseSubmit(owner))
+  try {
+    let why: string | undefined
+    try {
+      const result = await $.prompt.submit({ text, asUser: true })
+      if (result.drop !== undefined) why = `a hook dropped it: ${String(result.drop).slice(0, 120)}`
+    } catch (error) {
+      why = String(error).slice(0, 120)
+    }
+    guard.cancel()
+    releaseSubmit(owner)
+    if (why !== undefined) {
+      const reason = why
+      $.ui.log(`mod-pack: ${feature.id} could not send a prompt: ${reason}`)
+      await dispatch($, options, (f, state, ctx) => f.submitFailed?.(state, { text, why: reason }, ctx), feature.id)
+      $.ui.invalidate('ui.render')
+    }
+  } catch (error) {
+    $.ui.log(`mod-pack: ${feature.id} send failed: ${String(error)}`)
+  } finally {
+    guard.cancel()
+    releaseSubmit(owner)
+  }
 }
 
 // One model call for a feature, then the reply to the feature (`modelDone`). It is called with
@@ -182,13 +275,14 @@ async function afterCompaction($: EngineInterface, options: PluginOptions) {
 }
 
 // What the band's "compact" button does. It ignores the press while any compaction is
-// running (the lock), and says so by a toast while a model call holds the lock (a few seconds
-// at most: a call is cut after 15 seconds). `$.session.compact()` rejects while a turn runs and
+// running (the lock), and says so by a toast while a model call or a queued prompt holds the lock
+// (a few seconds at most: a call is cut after 15 seconds). `$.session.compact()` rejects while a turn runs and
 // resolves `{ skip }` when a hook vetoes: both become a toast, and the row stays as it was.
 // It runs through every hook but the calling one, so this plugin's own
 // `session.compact` hook does not see this call: the lock and the clear are done here.
 async function compactNow($: EngineInterface, options: PluginOptions) {
   if (busyWith === 'compaction') return
+  if (busyWith === 'prompt-submit') return $.ui.toast('Cache Keeper: Prompt Queue is sending a prompt. Press compact again in a moment.')
   if (busyWith !== undefined) return $.ui.toast('Cache Keeper: a Wait What retell is running. Press compact again in a few seconds.')
   busyWith = 'compaction'
   $.ui.invalidate('ui.render')
@@ -344,11 +438,50 @@ async function guardShellFailed($: EngineInterface, options: PluginOptions, comm
   return isProceed(answer) ? proceed() : { deny: denyReason(answer, (risks ?? []).map(r => r.kind)) }
 }
 
+// ---- Prompt Queue -----------------------------------------------------------------
+// The rules and the text are in queue.ts. The lock, the state and the sending are here.
+
+const QUEUE_OFF_TEXT = 'mod-pack: prompt-queue is OFF. Nothing is queued and nothing is sent. Turn it on with /mods on prompt-queue.'
+
+// `/q`. It runs one at a time with the mod's own callbacks (`isSerial`), so a prompt added in the
+// same moment as a turn ends is neither lost nor sent twice. When the command starts a send (`/q`
+// with no turn running), the lock is taken in the same moment as the decision, as `dispatch` does.
+async function queueCommand($: EngineInterface, options: PluginOptions, args: string): Promise<{ text: string }> {
+  if (!isFeatureOn(promptQueue, parseOverrides(await $.store.get(STORE_KEY)), options)) return { text: QUEUE_OFF_TEXT }
+  return inOrder(async () => {
+    const states: Record<string, unknown> = await read($, featureStates)
+    const before = states[promptQueue.id] as Queue | undefined
+    const result = runQ(args, before, busyWith)
+    const owner = result.send !== undefined ? beginSubmit() : undefined
+    if (result.send !== undefined && !owner) return { text: 'Prompt Queue: nothing was sent, because a compaction or another send is running. Nothing changed.' }
+    try {
+      const state = result.state ?? {}
+      if (result.state !== before) await update($, featureStates, all => ({ ...all, [promptQueue.id]: state }))
+    } catch (error) {
+      if (owner) releaseSubmit(owner)
+      throw error
+    }
+    if (owner && result.send !== undefined) {
+      // The engine refuses `$.prompt.submit` from inside a command.run hook ("it would wait on the
+      // turn this hook is holding"; found by the kit's host check). A timer of 0 ms sends it from an
+      // event of its own, right after this hook has answered.
+      const text = result.send
+      $.clock.after(0, () => void runSubmit($, options, promptQueue, text, owner))
+    }
+    $.ui.invalidate('ui.render')
+    return { text: result.text }
+  })
+}
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command
       .register({ name: 'mods', description: 'List the mod-pack features and turn them on or off.', argumentHint: '[on|off|toggle <id> | sound on|off | reset]' })
       .catch(error => $.ui.log(`mod-pack: could not register /mods: ${String(error)}`))
+    // `immediate`: /q must run while a turn is in flight. That is the point of a queue.
+    await $.command
+      .register({ name: 'q', description: 'Queue follow-up prompts. They send one at a time when a turn ends.', argumentHint: '<text> | rm <n> | clear | pause | resume', immediate: true })
+      .catch(error => $.ui.log(`mod-pack: could not register /q: ${String(error)}`))
     await dispatch($, options, (feature, state, ctx) => feature.sessionStart?.(state, { e }, ctx))
     await armTicker($, options)
     return next(e)
@@ -357,6 +490,7 @@ export const register: Register = (on, options) => {
   on('session.end', async ($, e, next) => {
     stopTicker()
     cancelAsk()
+    releaseSubmit()
     await dispatch($, options, (feature, state, ctx) => feature.sessionEnd?.(state, { e }, ctx)).catch(() => undefined)
     return next(e)
   })
@@ -384,6 +518,8 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     cancelAsk()
+    // The turn of a prompt on its way has started: the prompt is in, the lock is free.
+    releaseSubmit()
     await dispatch($, options, (feature, state, ctx) => feature.turnStart?.(state, { e }, ctx))
     await armTicker($, options)
     return next(e)
@@ -402,10 +538,18 @@ export const register: Register = (on, options) => {
     const result = runMods(e.args, FEATURES, parseOverrides(await $.store.get(STORE_KEY)), options)
     if (result.isChanged) {
       await $.store.set(STORE_KEY, result.overrides)
+      // A queue that is switched off is emptied: prompts that were queued must not send by themselves
+      // later, after /mods on, when the person has forgotten them.
+      if (!isFeatureOn(promptQueue, result.overrides, options)) {
+        await inOrder(() => update($, featureStates, all => Object.fromEntries(Object.entries(all).filter(([id]) => id !== promptQueue.id)) as ModPackFeatureStates))
+      }
       $.ui.invalidate('ui.render')
     }
     return { text: result.text }
   })
+
+  // Prompt Queue. Matched by command name, so it does not clash with other plugins' command.run hooks.
+  on('command.run', { command: 'q' }, ($, e) => queueCommand($, options, e.args))
 
   // Blast Radius. Matched by tool name, so it does not clash with the tool.call hooks
   // of other plugins. PowerShell is a tool of its own with the same `command` field.
@@ -430,25 +574,18 @@ export const register: Register = (on, options) => {
     const input = { props: e.props, now, options, isCompacting: busyWith === 'compaction' }
     const actions = { compact: () => void compactNow($, options) }
     const states: Record<string, unknown> = await read($, featureStates)
-    const rows: { id: string; row: RenderElement; lines: number }[] = []
-    let used = 0
-
+    // The rows that draw, in FEATURES order. A row is 1 line unless the feature says it draws more now
+    // (`bandLines`: Wait What, 2). `layoutRows` (settings.ts) gives out the lines of the budget.
+    const drawn: { id: string; row: RenderElement; asked: number }[] = []
     for (const { feature } of await active($, options)) {
-      if (used >= budget) break
       try {
         const row = feature.band?.(states[feature.id], input, el, actions)
-        if (!row) continue
-        // A row is 1 line unless the feature says it draws more now (`bandLines`: Wait What, 2).
-        // It never takes more than the rows left: then the first lines show and the rest is clipped.
-        const asked = feature.bandLines?.(states[feature.id], input) ?? 1
-        const wanted = Number.isFinite(asked) ? Math.floor(asked) : 1
-        const lines = Math.max(1, Math.min(MAX_ROW_LINES, wanted, budget - used))
-        rows.push({ id: feature.id, row, lines })
-        used += lines
+        if (row) drawn.push({ id: feature.id, row, asked: feature.bandLines?.(states[feature.id], input) ?? 1 })
       } catch (error) {
         $.ui.log(`mod-pack: ${feature.id} band failed: ${String(error)}`)
       }
     }
+    const rows = layoutRows(drawn, budget)
     if (rows.length === 0) return below
 
     const { Box } = el

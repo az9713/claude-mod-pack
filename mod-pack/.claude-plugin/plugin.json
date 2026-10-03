@@ -28,6 +28,13 @@
       "required": false,
       "default": 60
     },
+    "promptQueue": {
+      "type": "boolean",
+      "title": "Prompt Queue",
+      "description": "Type /q <text> while Claude works to queue follow-up prompts. They are sent one at a time when a turn ends, and a row above the prompt shows what waits. Costs no model tokens of its own: each queued prompt becomes a normal turn on your plan, and runs with your permissions when it is sent automatically.",
+      "required": false,
+      "default": true
+    },
     "waitWhat": {
       "type": "boolean",
       "title": "Wait What",

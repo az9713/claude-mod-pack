@@ -150,6 +150,6 @@ test('session.start registers the /mods command and passes the event on', async 
   on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
 
   const result = await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-  expect(registered).toEqual(['mods'])
+  expect(registered).toEqual(['mods', 'q']) // /q (Prompt Queue) joined /mods
   expect(result).toEqual({ cwd: '/work' })
 })

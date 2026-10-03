@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 
-import { isFeatureOn, isSoundAllowed, isSoundOn, MAX_OWN_ROWS, optionKey, parseOverrides, rowBudget } from './settings'
+import { isFeatureOn, isSoundAllowed, isSoundOn, layoutRows, MAX_OWN_ROWS, optionKey, parseOverrides, rowBudget } from './settings'
 
 const feature = { id: 'token-weather', defaultOn: true }
 const none = { features: {} }
@@ -63,4 +63,40 @@ test('row budget: one third of maxRows, at most MAX_OWN_ROWS, none under 3 rows'
   expect(rowBudget(6)).toBe(2)
   expect(rowBudget(12)).toBe(4)
   expect(rowBudget(500)).toBe(MAX_OWN_ROWS)
+})
+
+// ---- layoutRows: who gets how many of the budget's lines ----
+
+const ask = (...asked: number[]) => asked.map((n, i) => ({ id: `r${i + 1}`, asked: n }))
+const lay = (asked: number[], budget: number) => layoutRows(ask(...asked), budget).map(r => `${r.id}:${r.lines}`)
+
+test('layoutRows: rows take the lines they ask for (1 or 2), first row first', () => {
+  expect(lay([1, 1, 1], 4)).toEqual(['r1:1', 'r2:1', 'r3:1'])
+  expect(lay([1, 2], 4)).toEqual(['r1:1', 'r2:2'])
+  expect(lay([5, 0, -3, NaN], 9)).toEqual(['r1:2', 'r2:1', 'r3:1', 'r4:1']) // more than 2 is cut to 2; less than 1 is 1; not a number is 1
+})
+
+test('layoutRows: a row gets no more than the lines left, then is clipped to its first lines', () => {
+  expect(lay([1, 1, 2], 3)).toEqual(['r1:1', 'r2:1', 'r3:1'])
+  expect(lay([1, 2], 2)).toEqual(['r1:1', 'r2:1'])
+  expect(lay([2], 1)).toEqual(['r1:1'])
+})
+
+test('layoutRows: the lines of a 2-line row count against every row after it (a row that follows it can be dropped)', () => {
+  // budget 3: the 2-line row takes 2, the next row 1, and the one after finds none left.
+  expect(lay([2, 1, 1], 3)).toEqual(['r1:2', 'r2:1'])
+  // budget 4, a row of 2 lines between: 1 + 2 + 1 = 4, the fourth row finds none left.
+  expect(lay([1, 2, 1, 1], 4)).toEqual(['r1:1', 'r2:2', 'r3:1'])
+  // the same rows with 1 line each would all fit: it is the 2nd line that is charged.
+  expect(lay([1, 1, 1, 1], 4)).toEqual(['r1:1', 'r2:1', 'r3:1', 'r4:1'])
+})
+
+test('layoutRows: no budget, or no rows: nothing', () => {
+  expect(lay([1, 2], 0)).toEqual([])
+  expect(lay([], 4)).toEqual([])
+})
+
+test('layoutRows keeps what a row carries', () => {
+  const rows = layoutRows([{ id: 'a', asked: 1, row: 'x' }], 2)
+  expect(rows).toEqual([{ id: 'a', asked: 1, row: 'x', lines: 1 }])
 })

@@ -15,6 +15,10 @@ import type { Elements, ModelEffort, PluginOptions, RenderElement, RenderPropsOf
 // The terminal's element table: Box, Text, Button, ...
 export type Terminal = Elements['terminal']
 
+// Who holds the shared automation lock (see register.tsx): a compaction, a model call of a mod
+// (Wait What), or a prompt that the Prompt Queue is sending. Nobody: the lock is free.
+export type Lock = 'compaction' | 'model-call' | 'prompt-submit'
+
 // What the dispatcher tells a feature about the moment of the call.
 export type FeatureContext = {
   // True only when ALL of these hold: the global `sound` setting is ON, this
@@ -24,10 +28,13 @@ export type FeatureContext = {
   now: number
   // The plugin's settings (userConfig). A mod reads its own number settings here.
   options: PluginOptions
-  // True while the shared automation lock is held (a compaction or a model call, see
-  // register.tsx). Read at the moment of the call. A mod that starts an automatic action
-  // must not start it while this is true.
+  // True while the shared automation lock is held (a compaction, a model call or a queued prompt
+  // on its way, see register.tsx). Read at the moment of the call. A mod that starts an automatic
+  // action must not start it while this is true, unless it knows that the holder does not matter.
   isBusy: boolean
+  // Who holds the lock, in the same moment as `isBusy`. Undefined when it is free. The Prompt Queue
+  // reads it: it ignores a model call (the next prompt cancels it) but not a compaction.
+  lock: Lock | undefined
 }
 
 // One model call a feature asks the dispatcher to make (`Step.ask`). Plain data: the
@@ -63,6 +70,10 @@ export type Step<S> = {
   // A model call to make. Only when `ctx.isBusy` was false: the dispatcher takes the lock in
   // the same moment, with no wait in between. The result comes to `modelDone`.
   ask?: ModelAsk
+  // A prompt to send as the person's own words (`$.prompt.submit`, detached). Only when `ctx.lock`
+  // allowed it: the dispatcher takes the lock in the same moment, with no wait in between. If Claude
+  // Code refuses the prompt, the feature hears of it in `submitFailed`.
+  submit?: string
 }
 
 export type Feature<S = unknown> = {
@@ -78,6 +89,9 @@ export type Feature<S = unknown> = {
   hasSound?: boolean
   // The state when neither the user's setting nor a /mods override says.
   defaultOn: boolean
+  // True when a command of the mod also changes its state (`/q`). The dispatcher then runs this
+  // mod's callbacks one at a time with that command, so that neither overwrites the other.
+  isSerial?: true
 
   // `state` is the feature's own earlier state, undefined before its first step.
   // `context` is the engine's reading of the context window; undefined when it could not be read.
@@ -95,6 +109,8 @@ export type Feature<S = unknown> = {
   // The model call that `Step.ask` started has ended. `state` is read again now, so a feature
   // compares `turnId` with its own state to drop a result that came late.
   modelDone?: (state: S | undefined, input: { turnId: string; reply: ModelReply }, ctx: FeatureContext) => Step<S> | undefined
+  // The prompt that `Step.submit` sent was refused (a hook dropped it, or the call failed). `why` is short text.
+  submitFailed?: (state: S | undefined, input: { text: string; why: string }, ctx: FeatureContext) => Step<S> | undefined
 
   // One row for the band above the prompt, or null to draw nothing now.
   // The compositor clips the row to `bandLines` terminal rows (1 when the feature has no

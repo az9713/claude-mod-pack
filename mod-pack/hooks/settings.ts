@@ -48,3 +48,20 @@ export const MAX_OWN_ROWS = 4
 // The most lines one mod's row may take (a feature's `bandLines`). Wait What takes 2.
 export const MAX_ROW_LINES = 2
 export const rowBudget = (maxRows: number) => Math.max(0, Math.min(MAX_OWN_ROWS, Math.floor(maxRows / 3)))
+
+// Gives each row that draws its lines, first row first, out of `budget` lines. `asked` is what the
+// feature's `bandLines` said (1 when it has none). A row gets 1 line up to MAX_ROW_LINES, never more
+// than the lines left: it is then clipped to its first lines. Once no line is left, the rows after it
+// are dropped. The lines a row took are counted against every row after it.
+export const layoutRows = <T extends { asked: number }>(candidates: readonly T[], budget: number): (T & { lines: number })[] => {
+  const out: (T & { lines: number })[] = []
+  let used = 0
+  for (const candidate of candidates) {
+    if (used >= budget) break
+    const wanted = Number.isFinite(candidate.asked) ? Math.floor(candidate.asked) : 1
+    const lines = Math.max(1, Math.min(MAX_ROW_LINES, wanted, budget - used))
+    out.push({ ...candidate, lines })
+    used += lines
+  }
+  return out
+}
