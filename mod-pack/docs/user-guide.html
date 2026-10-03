@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>mod-pack User Guide: Test Steps</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--text:#e2e8f0;--text2:#cbd5e1;--muted:#94a3b8;--a1:#fb923c;--a2:#2dd4bf;--line:#334155;--warn:#facc15}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:0 16px 72px}
+header{padding:44px 0 20px;border-bottom:1px solid var(--line)}
+h1{font-size:2rem;line-height:1.2;margin:0 0 8px}
+h1 span{color:var(--a1)}
+h2{font-size:1.4rem;margin:44px 0 10px;color:var(--a2)}
+h3{font-size:1.05rem;margin:22px 0 6px;color:var(--a1)}
+p,li{color:var(--text2)}
+p{margin:0 0 12px}
+a{color:var(--a2)}
+code{background:#0b1220;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:.88em;color:var(--text)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;font-size:.88rem;color:var(--text);margin:8px 0 16px}
+pre code{background:none;border:0;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.92rem;margin:8px 0 18px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:#172033;color:var(--a2);font-weight:600;white-space:nowrap}
+td{color:var(--text2)}
+td:first-child{color:var(--a1);font-weight:600;white-space:nowrap}
+.note{border:1px solid var(--line);background:#172033;padding:10px 14px;border-radius:8px;margin:14px 0}
+.warn{border-color:var(--warn)}
+.muted{color:var(--muted)}
+footer{margin-top:48px;border-top:1px solid var(--line);padding-top:14px;font-size:.85rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+<h1>mod-pack <span>User Guide</span>: Test Steps</h1>
+<p>How to load <code>mod-pack</code> into a running Claude Code session and test its two mods, Token Weather and Blast Radius, in 14 steps. You do not need to exit the session.</p>
+<p class="muted">Version 0.1.0. Written 2026-10-02. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 14 below are the first on-screen check.</p>
+</div></header>
+<div class="wrap">
+
+<h2>1. Load mod-pack into the session</h2>
+<p>Claude Code reloads any plugin folder inside the session's hot-reload folder when the turn that changed it ends. Copy <code>mod-pack</code> there. If an older <code>token-weather</code> mod is in the same folder, move it out first. Two Token Weather mods would draw two weather rows.</p>
+<p>Run in PowerShell. Replace <code>&lt;session-id&gt;</code> with the folder name that already exists under <code>C:\Users\&lt;you&gt;\.claude\dev-mods\</code>.</p>
+<pre><code>$w = "C:\Users\&lt;you&gt;\.claude\dev-mods\&lt;session-id&gt;"
+New-Item -ItemType Directory -Force "C:\Users\&lt;you&gt;\.claude\dev-mods-disabled" | Out-Null
+# only if an old token-weather folder exists in $w:
+Move-Item "$w\token-weather" "C:\Users\&lt;you&gt;\.claude\dev-mods-disabled\token-weather-old"
+robocopy "&lt;path-to&gt;\mod-pack" "$w\mod-pack" /E /XD .git | Out-Null</code></pre>
+<ul>
+<li>The copy leaves out <code>.git</code>, so the watcher does not scan the repository history.</li>
+<li>robocopy exits with code 1 when it copied files. That is normal.</li>
+<li>The mod loads when the turn that made the copy ends.</li>
+<li>When you change <code>mod-pack</code> later, copy it again. The repository is the source, and the copy is a test build.</li>
+</ul>
+<div class="note"><b>No hot-reload folder?</b> Start a new terminal with <code>claude --plugin-dir &lt;path-to&gt;\mod-pack</code> instead.</div>
+
+<h2>2. Check that it loaded</h2>
+<ol>
+<li>A transcript line may say that <code>mod-pack</code> loaded. If a hook or the module fails, a dim line names the plugin and the reason.</li>
+<li>Type <code>/mods</code>. You should see a list with <code>token-weather</code> and <code>blast-radius</code>, both ON, and <code>sound: OFF</code>.</li>
+</ol>
+
+<h2>3. Test Token Weather and the /mods command (steps 1 to 8)</h2>
+<table>
+<tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
+<tr><td>1</td><td>Send any prompt and wait for the full answer.</td><td>A weather row appears above the prompt, for example <code>☀ Clear 18% 184.4k / 1M ▂▂ ▲ +3.6k last turn</code>.</td></tr>
+<tr><td>2</td><td>Compare its percent with <code>/context</code> or your status line.</td><td>Both percents are close.</td></tr>
+<tr><td>3</td><td>Look for the <code>next:</code> suggestions. They show only after answers of 80 characters or more, and only if the <code>next-steps</code> plugin is installed.</td><td>The suggestions and the weather row show together, one above the other.</td></tr>
+<tr><td>4</td><td>Type <code>/mods</code>.</td><td>A list of the two mods, each marked ON, with their flags.</td></tr>
+<tr><td>5</td><td>Type <code>/mods off token-weather</code>.</td><td>The weather row disappears. Other plugins' output stays.</td></tr>
+<tr><td>6</td><td>Type <code>/mods on token-weather</code>.</td><td>The row returns with no reload.</td></tr>
+<tr><td>7</td><td>Type <code>/mods sound on</code>, then <code>/mods sound off</code>.</td><td>A confirmation each time. On Windows you hear nothing, because plugin sound plays only on macOS.</td></tr>
+<tr><td>8</td><td>Type <code>/mods reset</code>.</td><td>All mods return to their config defaults.</td></tr>
+</table>
+<h3>How to read the weather row</h3>
+<table>
+<tr><th>Part</th><th>Meaning</th></tr>
+<tr><td>☀ Clear</td><td>The context window is under 25% full. Other bands: ☁ Cloudy 25–49%, ☂ Showers 50–74%, ☇ Storm 75–89%, ↯ Compact soon 90% and up.</td></tr>
+<tr><td>18%</td><td>Tokens in use divided by the window size.</td></tr>
+<tr><td>184.4k / 1M</td><td>Tokens in use, then the window size. The size comes from the session, not from a fixed number.</td></tr>
+<tr><td>▂▂</td><td>One bar for each of the last 12 finished turns, oldest on the left. Each bar is the share of the window in use, in steps of 12.5%.</td></tr>
+<tr><td>▲ +3.6k last turn</td><td>The tokens the last turn added. <code>▼</code> means the window got smaller, which happens after a compaction.</td></tr>
+</table>
+
+<h2>4. Test Blast Radius (steps 9 to 14)</h2>
+<div class="note warn"><b>Test on a throwaway folder only.</b> Blast Radius holds risky commands, but you must never test it on a real folder. Create the scratch folder first, in Git Bash. You can type <code>!</code> before each line to run it inside the session.</div>
+<pre><code>mkdir -p /tmp/mp-test/victim-a /tmp/mp-test/victim-b
+echo hi > /tmp/mp-test/victim-a/f.txt
+echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
+<p>Then send these prompts one at a time:</p>
+<table>
+<tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
+<tr><td>9</td><td><code>Use the Bash tool to run exactly: ls /tmp/mp-test</code></td><td>No dialog. The command runs.</td></tr>
+<tr><td>10</td><td><code>Use the Bash tool to run exactly: rm -rf /tmp/mp-test/victim-a</code></td><td>A dialog titled Blast Radius, with a preview and the options <b>Proceed</b> and <b>Cancel</b>.</td></tr>
+<tr><td>11</td><td>Choose <b>Cancel</b>.</td><td>Claude is told the person cancelled. <code>victim-a</code> still exists.</td></tr>
+<tr><td>12</td><td>Repeat step 10 and choose <b>Proceed</b>.</td><td><code>victim-a</code> is deleted.</td></tr>
+<tr><td>13</td><td>Type <code>/mods off blast-radius</code>, then ask for <code>rm -rf /tmp/mp-test/victim-b</code>.</td><td>No dialog. The folder is deleted.</td></tr>
+<tr><td>14</td><td>Type <code>/mods on blast-radius</code>.</td><td>The guard works again.</td></tr>
+</table>
+<h3>What Blast Radius holds</h3>
+<ul>
+<li>Recursive <code>rm</code> (<code>-r</code>, <code>-rf</code>, <code>-fr</code>, <code>--recursive</code>).</li>
+<li>Windows <code>rmdir /s</code>, <code>del /s</code> and <code>Remove-Item -Recurse</code>.</li>
+<li><code>git reset --hard</code>, <code>git clean</code> with a force flag, <code>git push --force</code>, <code>--force-with-lease</code> and <code>+ref</code>.</li>
+<li><code>git checkout -- .</code>, <code>git restore .</code>, <code>git branch -D</code>, <code>git stash drop</code> and <code>git stash clear</code>.</li>
+</ul>
+<p>It does not hold <code>rm file</code>, <code>rm -f file</code>, <code>git clean -n</code>, or plain <code>git push</code>. It is a safety net, not a permission system. Aliases, scripts that call <code>rm</code>, commands built from variables, <code>find -delete</code>, <code>dd</code> and redirects get past it.</p>
+
+<h2>5. What these tests cannot show</h2>
+<ul>
+<li><b>Storm and Compact soon colors.</b> A 1M window needs 750k tokens to reach Storm. There is no cheap way to get there in a test.</li>
+<li><b>Sound.</b> It is silent on Windows and Linux. Only macOS plays plugin sound.</li>
+<li><b><code>claude -p</code> behavior.</b> You cannot test the non-interactive path from inside a session. By design, Blast Radius denies risky commands when nothing can ask.</li>
+<li><b>Dialog order.</b> The type documentation says the Blast Radius dialog comes before Claude's own permission prompt. It has not been observed.</li>
+</ul>
+
+<h2>6. Undo</h2>
+<pre><code>Remove-Item -Recurse "$w\mod-pack"
+# restore the old mod, if you moved one:
+Move-Item "C:\Users\&lt;you&gt;\.claude\dev-mods-disabled\token-weather-old" "$w\token-weather"</code></pre>
+
+<h2>7. What to report</h2>
+<p>Send the number of any step whose result differs from the expected result. Add a screenshot or the text you see, and any dim line in the transcript that names <code>mod-pack</code>.</p>
+
+<footer>mod-pack 0.1.0 · MIT license · A mod is code that runs with your permissions. Run <code>claude plugin validate</code> on any mod before you install it.</footer>
+</div>
+</body>
+</html>
