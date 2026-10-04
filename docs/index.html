@@ -90,16 +90,16 @@ a{color:var(--a2)}
 <tr><td>Maturity</td><td>Documented at code.claude.com</td><td>API marked early access; may change between releases</td></tr>
 </table></div>
 
-<h2>4. Two real examples</h2>
+<h2>4. Two examples: a classic hook and a mod hook</h2>
 <div class="cols">
 <div class="card">
 <h3>Classic hook</h3>
-<p><code>~/.claude/settings.json:44-54</code>, shortened. Event <code>Notification</code>, matcher <code>permission_prompt</code>.</p>
-<pre><code>"type": "command",
-"command": "powershell.exe -NoProfile
-  -ExecutionPolicy Bypass
-  -File \"...\\notify-permission.ps1\""</code></pre>
-<p>It starts a separate process. It has no <code>$</code>, no <code>next</code> and no way to draw. Other hook events in the same file: <code>Stop</code> (async), <code>UserPromptSubmit</code>, <code>SessionEnd</code>, <code>SessionStart</code>; <code>PreToolUse</code> is an empty list.</p>
+<p>A generic example in <code>settings.json</code>. Event <code>PreToolUse</code>, matcher <code>Bash</code>. The script name is a placeholder.</p>
+<pre><code>"PreToolUse": [ { "matcher": "Bash",
+  "hooks": [ { "type": "command",
+    "command": "./scripts/check-bash.sh",
+    "timeout": 30 } ] } ]</code></pre>
+<p>Claude Code starts <code>check-bash.sh</code> as a separate process for each Bash call and sends the event as JSON on stdin. Exit code 2 blocks the call and sends stderr to Claude. The script has no <code>$</code>, no <code>next</code> and no documented way to draw. The mod hook on the right does the same job for a shell command.</p>
 </div>
 <div class="card">
 <h3>Mod hook</h3>
@@ -153,7 +153,7 @@ a{color:var(--a2)}
 <li>Hooks documentation: <a href="https://code.claude.com/docs/en/hooks-guide.md">code.claude.com/docs/en/hooks-guide.md</a> and <a href="https://code.claude.com/docs/en/hooks.md">hooks.md</a>.</li>
 <li>Mods documentation, from <code>README.txt</code>: <code>code.claude.com/docs/en/plugins/mods/overview</code> and <code>.../mods/create</code>. Not fetched in this session.</li>
 <li>Mods API: <code>reference.md</code> and <code>types/claude-code.d.ts</code> of the <code>plugin-authoring</code> skill (Claude Code 2.1.288). The d.ts lines read directly for this report: 1060-1087, 3738-3753, 12084-12101.</li>
-<li>Local: <code>claude-mods-field-guide.html</code> (section 1), <code>mod-pack/hooks/register.tsx</code>, <code>mod-pack/hooks/feature.ts</code>, and the <code>hooks</code> section of <code>~/.claude/settings.json</code>. The line references in section 4 and 5 come from the local-material research agent and were not re-read by me.</li>
+<li>Local: <code>claude-mods-field-guide.html</code> (section 1), <code>mod-pack/hooks/register.tsx</code> and <code>mod-pack/hooks/feature.ts</code>. The line references to <code>register.tsx</code> in sections 4 and 5 come from the local-material research agent and were not re-read by me.</li>
 </ul>
 
 </main>
