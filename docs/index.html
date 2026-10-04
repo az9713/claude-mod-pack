@@ -90,7 +90,7 @@ a{color:var(--a2)}
 <tr><td>Maturity</td><td>Documented at code.claude.com</td><td>API marked early access; may change between releases</td></tr>
 </table></div>
 
-<h2>4. Two real examples from this machine</h2>
+<h2>4. Two real examples</h2>
 <div class="cols">
 <div class="card">
 <h3>Classic hook</h3>
@@ -130,7 +130,7 @@ a{color:var(--a2)}
 
 <h2>8. Limits and gotchas</h2>
 <ul>
-<li><b>Sound.</b> <code>$.audio.play</code> uses <code>afplay</code> on macOS. A Linux or Windows terminal plays nothing. This machine runs Windows 11, so mod sound does nothing here by the stated rules. <code>/mods sound on</code> reports the same limit.</li>
+<li><b>Sound.</b> <code>$.audio.play</code> uses <code>afplay</code> on macOS. A Linux or Windows terminal plays nothing. On Windows, mod sound does nothing by the stated rules. <code>/mods sound on</code> reports the same limit.</li>
 <li><b>Panes.</b> A pane opened without a user action waits undrawn below 144 columns (110 for an id the user opened before). A pane opened by a command or button seats at any width.</li>
 <li><b>Band size.</b> Size panes and bands to <code>e.props.bodyColumns</code>, not to <code>viewport.columns</code>. The <code>AbovePrompt</code> band is capped at half the terminal rows, prompt included. A height change alone does not redraw.</li>
 <li><b>Invalid tree.</b> The engine draws its own component and logs <code>ui.render (&lt;Component&gt;): a hook returned a tree that does not validate</code>.</li>
@@ -145,8 +145,7 @@ a{color:var(--a2)}
 <li><b>Not verified.</b> Whether a mod's <code>tool.check</code> decision overrides a deny from a user-level settings hook. The type file says managed-settings hooks run first and their deny is the call's result; it does not state the case for user-level hooks.</li>
 <li><b>Not verified.</b> That classic hooks cannot draw. The hooks documentation does not describe drawing; it does not state a prohibition either. The field guide states that a settings hook cannot draw.</li>
 <li><b>Not verified.</b> Which surfaces run classic hooks.</li>
-<li><b>Not verified.</b> The field guide's cache lifetime figures and community star counts. The <code>mod-pack</code> README states that no person has yet watched it in a real terminal.</li>
-<li><b>Gap.</b> There is no <code>cc4_mod.txt</code> in the folder. The reason is unknown.</li>
+<li><b>Not verified.</b> The field guide's cache lifetime figures and community star counts. The <code>mod-pack</code> README lists which parts have been seen in a real terminal and which have not.</li>
 </ul>
 
 <h2>10. Sources</h2>
