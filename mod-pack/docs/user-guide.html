@@ -35,8 +35,8 @@ footer{margin-top:48px;border-top:1px solid var(--line);padding-top:14px;font-si
 <body>
 <header><div class="wrap">
 <h1>mod-pack <span>User Guide</span>: Test Steps</h1>
-<p>How to load <code>mod-pack</code> into a running Claude Code session and test its six mods, Token Weather, Blast Radius, Cache Keeper, Wait What, Prompt Queue and Snake, in 85 steps. You do not need to exit the session.</p>
-<p class="muted">Version 0.1.0. Written 2026-10-02, extended 2026-10-03. Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 85 below are the first on-screen check. Wait What (steps 28 to 41, and 78 to 85 for the notes that say why no retell shows) spends model tokens: read its warning first. Prompt Queue (steps 42 to 56) sends real prompts by itself: read its warning first. Snake (steps 57 to 77) pauses and resumes by itself while Claude works: read its notes first.</p>
+<p>How to load <code>mod-pack</code> into a running Claude Code session and test its seven mods, Token Weather, Blast Radius, Cache Keeper, Wait What, Prompt Queue, Snake and Ship Gate, in 99 steps. You do not need to exit the session.</p>
+<p class="muted">Version 0.1.0. Written 2026-10-02, extended 2026-10-03 (Ship Gate). Nobody has yet seen these steps run on a real screen: the automated tests and <code>claude plugin validate</code> pass, and the <code>/mods</code> command is confirmed to load. Steps 1 to 99 below are the first on-screen check. Wait What (steps 28 to 41, and 78 to 85 for the notes that say why no retell shows) spends model tokens: read its warning first. Prompt Queue (steps 42 to 56) sends real prompts by itself: read its warning first. Snake (steps 57 to 77) pauses and resumes by itself while Claude works: read its notes first. Ship Gate (steps 86 to 99) denies a commit and holds a push on purpose: run it on the scratch repository only.</p>
 </div></header>
 <div class="wrap">
 
@@ -274,7 +274,45 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 </table>
 <p class="muted">A short answer (under 200 characters), a subagent's turn, and a turn that was interrupted, failed or refused draw no note in the band. Only <code>/mods</code> gives the reason for them (steps 79 and 80). When the <code>wait-what</code> line has no <code>last:</code> line after a long answer, no outcome is stored: no main turn finished since your last prompt, the call is still running, or the <code>turn.complete</code> hook was not reached. Report that case too.</p>
 
-<h2>10. What these tests cannot show</h2>
+<h2>10. Test Ship Gate (steps 86 to 99)</h2>
+<div class="note warn"><b>Test on a scratch repository only.</b> Ship Gate denies commits and holds pushes. This test pushes to a bare repository in a scratch folder on your own disk, so nothing leaves the machine. Replace <code>&lt;you&gt;</code> with your Windows user name. The scratch folder is under your user folder on purpose: Ship Gate then finds your user name in the folder path and searches the files for it. Create the scratch repository first, in Git Bash. You can type <code>!</code> before each line to run it inside the session.</div>
+<pre><code>S="C:/Users/&lt;you&gt;/mp-ship-test"
+mkdir -p "$S" &amp;&amp; cd "$S"
+git init -q --bare remote.git
+git init -q work &amp;&amp; cd work
+git config user.email "you@example.com"
+git config user.name "tester"
+git remote add origin "$S/remote.git"
+echo '{"scripts":{"test":"echo ok"}}' &gt; package.json
+echo "made by &lt;you&gt;" &gt; notes.txt
+git add . &amp;&amp; git commit -q -m "notes"
+echo 'export const a = 1' &gt; a.ts</code></pre>
+<p>The e-mail <code>you@example.com</code> is not a noreply address, on purpose: Ship Gate should flag it. Then send these prompts one at a time. Each one has Claude run a command with the Bash tool. Write the folder out in full, as in the table. A command with <code>cd "$S"</code> cannot be resolved, and Ship Gate then says it looked at nothing.</p>
+<table>
+<tr><th>Step</th><th>Do this</th><th>Expected result</th></tr>
+<tr><td>86</td><td><code>Use the Bash tool to run exactly: cd C:/Users/&lt;you&gt;/mp-ship-test/work &amp;&amp; git status --short</code></td><td>The command runs without a dialog. It lists <code>?? a.ts</code>.</td></tr>
+<tr><td>87</td><td><code>Use the Bash tool to run exactly: cd C:/Users/&lt;you&gt;/mp-ship-test/work &amp;&amp; git add a.ts &amp;&amp; git commit -m "add a"</code></td><td>The command is denied. Claude is told: <code>Ship Gate: git commit denied</code>, the file <code>a.ts</code>, <code>No test, type check or validator has passed in this session.</code> and the comment <code># ship-gate: skip-tests</code>. Run <code>!git -C C:/Users/&lt;you&gt;/mp-ship-test/work log --oneline</code>: only <code>notes</code> is there.</td></tr>
+<tr><td>88</td><td><code>Use the Bash tool to run exactly: cd C:/Users/&lt;you&gt;/mp-ship-test/work &amp;&amp; npm test</code></td><td>The command runs and prints <code>ok</code>. No dialog.</td></tr>
+<tr><td>89</td><td>Send the prompt of step 87 again.</td><td>The commit goes through: the tree is the same as when the check passed. <code>git log --oneline</code> now lists <code>add a</code>.</td></tr>
+<tr><td>90</td><td><code>Use the Bash tool to run exactly: cd C:/Users/&lt;you&gt;/mp-ship-test/work &amp;&amp; echo 'export const b = 2' &gt;&gt; a.ts</code></td><td>The command runs. No dialog: it is an edit, not a commit.</td></tr>
+<tr><td>91</td><td><code>Use the Bash tool to run exactly: cd C:/Users/&lt;you&gt;/mp-ship-test/work &amp;&amp; git commit -am "edit a"</code></td><td>The commit is denied. The reason says the last passing check was <code>npm test</code>, <code>N min ago</code>, <code>on a different tree: files changed since</code>. Ship Gate reads the tree when the command starts, so an edit and a commit in one command would not be held: that is why steps 90 and 91 are two commands.</td></tr>
+<tr><td>92</td><td><code>Use the Bash tool to run exactly: cd C:/Users/&lt;you&gt;/mp-ship-test/work &amp;&amp; git commit -am "edit a" # ship-gate: skip-tests</code></td><td>The commit goes through.</td></tr>
+<tr><td>93</td><td><code>Use the Bash tool to run exactly: cd C:/Users/&lt;you&gt;/mp-ship-test/work &amp;&amp; git push -u origin HEAD</code></td><td>A dialog titled <b>Ship Gate</b> with <b>Proceed</b> and <b>Cancel</b>. It shows: <code>remote origin:</code> and the path of <code>remote.git</code> (visibility not readable: the remote is not on GitHub), <code>3 unpushed commits.</code>, <code>author or committer addresses that are not noreply addresses: you@example.com</code>, <code>3 commits with a personal string in an address or subject.</code>, and <code>personal strings (&lt;you&gt;, you@example.com)</code> with the line <code>notes.txt:1: made by &lt;you&gt;</code>, then <code>binary files (images) are not searched.</code></td></tr>
+<tr><td>94</td><td>Choose <b>Cancel</b>.</td><td>Claude is told the person cancelled. Run <code>!git -C C:/Users/&lt;you&gt;/mp-ship-test/remote.git branch</code>: it prints nothing.</td></tr>
+<tr><td>95</td><td>Send the prompt of step 93 again and choose <b>Proceed</b>.</td><td>The push runs. The same <code>git branch</code> command now prints the branch.</td></tr>
+<tr><td>96</td><td><code>Use the Bash tool to run exactly: cd C:/Users/&lt;you&gt;/mp-ship-test/work &amp;&amp; git push --dry-run</code></td><td>No dialog: a dry run publishes nothing.</td></tr>
+<tr><td>97</td><td>Type <code>/mods</code>.</td><td>The <code>ship-gate</code> line is <code>ON</code>. Under it: <code>last: person approved: push; last passing check: npm test</code>.</td></tr>
+<tr><td>98</td><td>Type <code>/mods off ship-gate</code>. Then <code>Use the Bash tool to run exactly: cd C:/Users/&lt;you&gt;/mp-ship-test/work &amp;&amp; echo 'export const c = 3' &gt; c.ts &amp;&amp; git add c.ts &amp;&amp; git commit -m "add c"</code></td><td>The commit goes through with no denial.</td></tr>
+<tr><td>99</td><td>Type <code>/mods on ship-gate</code>.</td><td>Both checks work again.</td></tr>
+</table>
+<h3>What Ship Gate holds</h3>
+<ul>
+<li><b>Publish gate:</b> <code>git push</code> (not <code>--dry-run</code> or <code>-n</code>), <code>gh repo create</code>, <code>gh api</code> on a <code>pages</code> path with <code>-X POST</code>, <code>-X PUT</code> or an <code>-f</code> field, and <code>gh repo edit --visibility public</code>. It always asks. Cancel, a dismissed dialog and a <code>claude -p</code> run deny the command.</li>
+<li><b>Tested? gate:</b> <code>git commit</code> when the status lists a code file and no test, type check or validator (<code>npm test</code>, <code>tsc</code>, <code>pytest</code>, <code>cargo test</code>, <code>go test</code>, <code>claude plugin test</code>, and a few more) has passed on the current tree. A commit of text files only is not held. The comment <code># ship-gate: skip-tests</code> lets one commit go.</li>
+<li>It does not see images, text removed in an earlier unpushed commit, a script that calls <code>git</code>, or a folder named with a variable. A runner that it does not know (<code>./check.sh</code>) needs the skip comment.</li>
+</ul>
+
+<h2>11. What these tests cannot show</h2>
 <ul>
 <li><b>Storm and Compact soon colors.</b> A 1M window needs 750k tokens to reach Storm, which costs too much for a test.</li>
 <li><b>Sound.</b> Only macOS plays plugin sound, so Windows and Linux are silent.</li>
@@ -298,15 +336,20 @@ echo hi > /tmp/mp-test/victim-b/f.txt</code></pre>
 <li><b>The look of the board.</b> The glyphs <code>██</code>, <code>●</code> and <code>·</code> are drawn 2 columns to a cell. A font that draws <code>●</code> or <code>·</code> wider than 1 column shifts the board. Nobody has seen the board drawn.</li>
 <li><b>A real Blast Radius dialog open beside the game.</b> The automated test holds a stand-in for the dialog. Step 74 is the first run with the real one. The dialog opens only inside a turn, so the timing in step 74 is yours.</li>
 <li><b>Toasts while Snake is open.</b> The pane is opened without <code>holdToasts</code>, so the cache toast and the queue toast should show. This was not run on a real screen.</li>
+<li><b>Ship Gate on a real GitHub remote.</b> Steps 86 to 99 push to a bare repository on your disk. The visibility from <code>gh repo view</code>, the hidden credential in a remote URL, and the Pages and <code>gh repo create</code> dialogs are not run here. They are tested with stand-ins for the engine only.</li>
+<li><b>How a denial reads to Claude, with other models.</b> In a headless run (<code>claude -p</code>, the haiku model, 2026-10-03) the commands of steps 87, 88, 89, 91 and 92 gave the results above, and a push gave the non-interactive denial. After the denial of step 91, Claude ran <code>npm test</code> and committed again. Another model may stop and ask you instead. The dialog of steps 93 to 95 needs a person, so it was not run there.</li>
+<li><b>Ship Gate beside Blast Radius.</b> A <code>git push --force</code> should ask twice, Blast Radius first. Not run on a real screen.</li>
 <li><b>The high score across sessions and a hot reload.</b> The high score is read from the plugin store when you open the pane. A reload of the plugin drops the game's timer. The game then waits until the next prompt or key press. The steps run neither.</li>
 </ul>
 
-<h2>11. Undo</h2>
+<h2>12. Undo</h2>
 <pre><code>Remove-Item -Recurse "$w\mod-pack"
 # restore the old mod, if you moved one:
-Move-Item "C:\Users\&lt;you&gt;\.claude\dev-mods-disabled\token-weather-old" "$w\token-weather"</code></pre>
+Move-Item "C:\Users\&lt;you&gt;\.claude\dev-mods-disabled\token-weather-old" "$w\token-weather"
+# remove the Ship Gate scratch repository:
+Remove-Item -Recurse "C:\Users\&lt;you&gt;\mp-ship-test"</code></pre>
 
-<h2>12. What to report</h2>
+<h2>13. What to report</h2>
 <p>Send the number of any step whose result differs from the expected result. Add a screenshot or the text you see, and any dim line in the transcript that names <code>mod-pack</code>.</p>
 
 <footer>mod-pack 0.1.0 · MIT license · A mod is code that runs with your permissions. Run <code>claude plugin validate</code> on any mod before you install it.</footer>
