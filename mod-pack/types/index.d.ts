@@ -17,11 +17,16 @@ export type ModPackRetell = { calls?: number[]; pending?: string; lines?: string
 // turn of the main conversation runs, and the turn that last sent a prompt (it never sends twice).
 export type ModPackQueue = { items?: string[]; pause?: 'user' | 'aborted' | 'error' | 'refusal' | 'send-failed'; isWorking?: boolean; sentFor?: string }
 
+// Ship Gate: the last test-like command that passed (`command` is cut to 80 characters, `at` is the clock in ms,
+// `fingerprint` is the tree it passed on), and one line about the last time the gate held a command.
+export type ModPackShipGate = { test?: { command: string; at: number; fingerprint: string }; gate?: string }
+
 export type ModPackFeatureStates = {
   'token-weather'?: ModPackSample[]
   'cache-keeper'?: ModPackCacheClock
   'prompt-queue'?: ModPackQueue
   'wait-what'?: ModPackRetell
+  'ship-gate'?: ModPackShipGate
 }
 
 // Snake: one cell of the board (x from the left, y from the top, both from 0).

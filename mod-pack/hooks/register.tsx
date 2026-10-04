@@ -22,6 +22,10 @@ import { runMods } from './mods-command'
 import { promptQueue } from './prompt-queue'
 import { runQ } from './queue'
 import type { Queue } from './queue'
+import {
+  buildPublishQuestion, codeFiles, commitDeny, describePublish, fingerprintOf, GITHUB_SLUG, personalTerms, plan, publishDeny, publishFailedDeny, SHIP_HEADER, shipGate,
+} from './ship-gate'
+import type { Commit, Publish, TestRun } from './ship-gate'
 import { isFeatureOn, isSoundAllowed, isSoundOn, layoutRows, parseOverrides, rowBudget, STORE_KEY } from './settings'
 import { MIN_COLUMNS, PANE_ROWS, snake, snakeView } from './snake'
 import { halt, newGame, parseBest, pauseFor, restart, resumeFrom, steer, step, toggle } from './snake-game'
@@ -30,10 +34,10 @@ import { tokenWeather } from './token-weather'
 import { waitWhat } from './wait-what'
 import type { ModPackFeatureStates } from '../types'
 
-// The order is the row order in the band. Blast Radius and Snake draw no row (Snake draws a pane).
+// The order is the row order in the band. Blast Radius, Ship Gate and Snake draw no row (Snake draws a pane).
 // Prompt Queue stands before Wait What on purpose: its row is 1 line and must not be starved by a
 // 2-line retell.
-const FEATURES: readonly Feature[] = [tokenWeather, cacheKeeper, promptQueue, waitWhat, blastRadius, snake]
+const FEATURES: readonly Feature[] = [tokenWeather, cacheKeeper, promptQueue, waitWhat, blastRadius, shipGate, snake]
 
 // Every feature's state, by feature id.
 const featureStates = atom({ plugin: 'mod-pack', key: 'features' } as const, {} as ModPackFeatureStates)
@@ -400,10 +404,10 @@ async function previewRisk($: EngineInterface, risk: Risk, cwd: string | undefin
 // undefined when `$.ui.ask` rejects. It rejects when the dialog is dismissed, and in a
 // `claude -p` run, where nobody can be asked. While the question is open a Snake game that is
 // running is paused (`holdSnake`): the dialog takes the keyboard, so the person cannot steer.
-async function askPerson($: EngineInterface, options: PluginOptions, question: string): Promise<string | undefined> {
+async function askPerson($: EngineInterface, options: PluginOptions, question: string, header = DIALOG_HEADER): Promise<string | undefined> {
   await holdSnake($, options, true)
   try {
-    return await $.ui.ask(question, { options: [PROCEED, CANCEL], header: DIALOG_HEADER }).then(
+    return await $.ui.ask(question, { options: [PROCEED, CANCEL], header }).then(
       answer => answer,
       () => undefined,
     )
@@ -451,6 +455,180 @@ async function guardShellFailed($: EngineInterface, options: PluginOptions, comm
   const question = buildQuestion(command, risks ?? [], [`${NO_PREVIEW}: the Blast Radius check itself failed${why}.`])
   const answer = await askPerson($, options, question)
   return isProceed(answer) ? proceed() : { deny: denyReason(answer, (risks ?? []).map(r => r.kind)) }
+}
+
+// ---- Ship Gate --------------------------------------------------------------------
+// The rules and the text are in ship-gate.ts. The engine calls are here. It runs inside the same
+// `tool.call` hooks as Blast Radius (the engine refuses the same matcher twice), after it.
+
+// A remote named in `git push <remote>`: a plain name only. Anything else is looked up as the upstream.
+const SAFE_REMOTE = /^[\w.-]+$/
+const VISIBILITY_TIMEOUT_MS = 5000 // `gh repo view` goes to the network
+
+// Read at call time, so `/mods off ship-gate` applies at once, with no reload.
+async function isShipGateOn($: EngineInterface, options: PluginOptions) {
+  return isFeatureOn(shipGate, parseOverrides(await $.store.get(STORE_KEY)), options)
+}
+
+// What the tree looks like now: the `git status` text and a fingerprint of the changed paths plus `git diff HEAD`.
+// The status letters are left out of the fingerprint, so a `git add` between a check and a commit (` M` to `M `)
+// is not an edit. Undefined when git cannot read the folder. `git()` cuts each output at OUTPUT_CAP characters.
+async function treeFingerprint($: EngineInterface, cwd: string | undefined) {
+  const [status, diff] = await Promise.all([
+    git($, ['status', '--porcelain', '-uall'], cwd),
+    git($, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', 'HEAD'], cwd),
+  ])
+  if (!status?.ok) return undefined
+  const paths = status.text.split(/\r?\n/).filter(Boolean).map(line => line.slice(3)).join('\n')
+  return { status: status.text, fingerprint: fingerprintOf(paths, diff?.ok ? diff.text : '') }
+}
+
+async function noteShip($: EngineInterface, patch: { gate?: string; test?: { command: string; at: number; fingerprint: string } }) {
+  await update($, featureStates, all => ({ ...all, 'ship-gate': { ...all['ship-gate'], ...patch } }))
+}
+
+// The Tested? gate for one commit. Returns the reason to deny, or undefined to let it go on. It lets the
+// command go on when it cannot judge: the folder is not known, git cannot read it, only text files change.
+async function shipCommit($: EngineInterface, commit: Commit): Promise<string | undefined> {
+  if (commit.isSkipped || commit.isCovered || !commit.dir.isKnown) return undefined
+  const here = await treeFingerprint($, commit.dir.path)
+  if (!here) return undefined
+  const files = codeFiles(here.status)
+  if (files.length === 0) return undefined
+  const test = (await read($, featureStates))['ship-gate']?.test
+  if (test && test.fingerprint === here.fingerprint) return undefined
+  const now = await $.clock.now().catch(() => NaN)
+  await noteShip($, { gate: `denied a commit of ${files.length} code ${files.length === 1 ? 'file' : 'files'}: no passing check on this tree` })
+  return commitDeny(files, test, now)
+}
+
+// The facts for one publish command: what `git`, `gh` and `git grep` say. Every step is best effort and
+// never throws, so the dialog is always shown.
+async function publishFacts($: EngineInterface, options: PluginOptions, publish: Publish): Promise<string[]> {
+  try {
+    const cwd = publish.dir.path
+    if (!publish.dir.isKnown) return describePublish({ kind: publish.kind, hasSource: publish.hasSource, isFolderKnown: false, terms: [], grepRan: false })
+    const email = await git($, ['config', 'user.email'], cwd)
+    const terms = personalTerms({ path: cwd, email: email?.ok ? email.text.trim() : undefined, extra: options.shipGateTerms })
+
+    let remote: string | undefined
+    let url: string | undefined
+    let log: string | undefined
+    if (publish.kind === 'push') {
+      const upstream = await git($, ['rev-parse', '--abbrev-ref', '@{u}'], cwd)
+      const named = publish.remote && SAFE_REMOTE.test(publish.remote) ? publish.remote : undefined
+      remote = named ?? (upstream?.ok ? upstream.text.trim().split('/')[0] : undefined) ?? 'origin'
+      const place = await git($, ['remote', 'get-url', remote], cwd)
+      url = place?.ok ? place.text.trim() : undefined
+      const range = !named && upstream?.ok ? ['@{u}..HEAD'] : ['HEAD', '--not', `--remotes=${remote}`]
+      const listed = await git($, ['log', '-n', '200', '--format=%h%x09%ae%x09%ce%x09%s', ...range], cwd)
+      log = listed?.ok ? listed.text : undefined
+    }
+
+    // `gh repo view` names the repository by its GitHub slug when the remote is one. It needs the network.
+    const slug = url ? GITHUB_SLUG.exec(url) : null
+    const view = publish.kind === 'create'
+      ? undefined
+      : await $.process.run(['gh', 'repo', 'view', ...(slug ? [`${slug[1]}/${slug[2]}`] : []), '--json', 'visibility', '--jq', '.visibility'], { cwd, timeoutMs: VISIBILITY_TIMEOUT_MS }).catch(() => undefined)
+    const visibility = view?.exitCode === 0 ? view.stdout.trim() || undefined : undefined
+
+    // The text files of the tree that would be published. `git grep` ends with 1 when nothing matches.
+    const isTreeOut = (publish.kind === 'push' || publish.hasSource) && terms.length > 0
+    const grep = isTreeOut ? await git($, ['grep', '-n', '-I', '-i', '-F', ...terms.flatMap(t => ['-e', t]), 'HEAD'], cwd) : undefined
+    const head = isTreeOut ? await git($, ['rev-parse', '--verify', 'HEAD'], cwd) : undefined
+    const hits = grep && head?.ok && (grep.ok || grep.text === '') ? (grep.ok ? grep.text : '') : undefined
+
+    return describePublish({
+      kind: publish.kind,
+      ...(remote ? { remote } : {}),
+      ...(url ? { url } : {}),
+      ...(visibility ? { visibility } : {}),
+      ...(publish.flag ? { flag: publish.flag } : {}),
+      hasSource: publish.hasSource,
+      isFolderKnown: true,
+      terms,
+      ...(log !== undefined ? { log } : {}),
+      ...(hits !== undefined ? { hits } : {}),
+      grepRan: hits !== undefined,
+    })
+  } catch (error) {
+    $.ui.log(`mod-pack: ship-gate facts failed: ${String(error)}`)
+    return ['the check of the command failed, so nothing was looked at.']
+  }
+}
+
+// The publish gate for a command that has one or more publish parts: one dialog. Only an explicit
+// Proceed lets it run; Cancel, a dismissed dialog and no one to ask deny it (fail closed).
+async function shipPublish($: EngineInterface, options: PluginOptions, command: string, publishes: readonly Publish[]): Promise<string | undefined> {
+  const facts: string[] = []
+  for (const publish of publishes.slice(0, MAX_RISKS_PREVIEWED)) facts.push(...(await publishFacts($, options, publish)))
+  const kinds = publishes.map(p => p.kind)
+  const answer = await askPerson($, options, buildPublishQuestion(command, kinds, facts), SHIP_HEADER)
+  if (isProceed(answer)) {
+    await noteShip($, { gate: `person approved: ${kinds.join(', ')}` })
+    return undefined
+  }
+  await noteShip($, { gate: `held: ${kinds.join(', ')} (${answer === undefined ? 'no answer' : 'cancelled'})` })
+  return publishDeny(answer, kinds)
+}
+
+// Records a passing test-like command with the fingerprint of the tree it passed on. Never throws.
+async function noteTest($: EngineInterface, tests: readonly TestRun[]) {
+  try {
+    const last = tests[tests.length - 1]
+    if (!last?.dir.isKnown) return
+    const here = await treeFingerprint($, last.dir.path)
+    if (!here) return
+    await noteShip($, { test: { command: last.name, at: await $.clock.now().catch(() => NaN), fingerprint: here.fingerprint } })
+  } catch (error) {
+    $.ui.log(`mod-pack: ship-gate could not record a test: ${String(error)}`)
+  }
+}
+
+// The Ship Gate part of the `tool.call` guard. An ordinary command, or the mod switched off, goes
+// straight on. A publish waits for the dialog. A commit of code with no passing check is denied.
+// After the command ran, a test-like command that passed is recorded.
+async function guardShip($: EngineInterface, options: PluginOptions, command: string, proceed: () => Promise<ToolCallResult>): Promise<ToolCallResult> {
+  if (!(await isShipGateOn($, options))) return proceed()
+  const cwd = await $.session.cwd().catch(() => undefined)
+  const found = plan(command, cwd)
+  if (found.commits.length === 0 && found.publishes.length === 0 && found.tests.length === 0) return proceed()
+
+  for (const commit of found.commits) {
+    const reason = await shipCommit($, commit)
+    if (reason) return { deny: reason }
+  }
+  if (found.publishes.length > 0) {
+    const reason = await shipPublish($, options, command, found.publishes)
+    if (reason) return { deny: reason }
+  }
+
+  const result = await proceed()
+  const interrupted = (result.result as { interrupted?: boolean } | undefined)?.interrupted === true
+  if (found.tests.length > 0 && result.deny === undefined && !result.isError && !interrupted) await noteTest($, found.tests)
+  return result
+}
+
+// Both guards, Blast Radius first. The command runs only when neither holds it.
+function guardCommand($: EngineInterface, options: PluginOptions, command: string, proceed: () => Promise<ToolCallResult>): Promise<ToolCallResult> {
+  return guardShell($, options, command, () => guardShip($, options, command, proceed))
+}
+
+// The Ship Gate crashed before the command ran (a command that had already run is replayed by
+// `guardShellFailed`). A publish is refused; any other command goes on, as a safe command does there.
+async function shipFailed($: EngineInterface, options: PluginOptions, command: string, proceed: () => Promise<ToolCallResult>): Promise<ToolCallResult> {
+  if (!(await isShipGateOn($, options).catch(() => true))) return proceed()
+  let isPublish = false
+  try {
+    isPublish = plan(command, undefined).publishes.length > 0
+  } catch {
+    isPublish = false
+  }
+  return isPublish ? { deny: publishFailedDeny } : proceed()
+}
+
+function guardCommandFailed($: EngineInterface, options: PluginOptions, command: string, failure: { message?: string; called: boolean }, proceed: () => Promise<ToolCallResult>): Promise<ToolCallResult> {
+  return guardShellFailed($, options, command, failure, () => (failure.called ? proceed() : shipFailed($, options, command, proceed)))
 }
 
 // ---- Prompt Queue -----------------------------------------------------------------
@@ -753,17 +931,18 @@ export const register: Register = (on, options) => {
     )
   })
 
-  // Blast Radius. Matched by tool name, so it does not clash with the tool.call hooks
+  // Blast Radius and Ship Gate: one hook per tool, because guardCommand runs Blast Radius, then Ship Gate.
+  // Matched by tool name, so it does not clash with the tool.call hooks
   // of other plugins. PowerShell is a tool of its own with the same `command` field.
   // The @ts-ignore lines: with many MCP servers connected, the engine writes a large
   // `.claude-plugin/types/claude-code-mcp/` and tsc then stops on a matcher for
   // `tool.call` with TS2589 (excessively deep). The types inside the hook still check.
   // @ts-ignore
-  on('tool.call', { tool: 'Bash' }, ($, e, next) => guardShell($, options, e.command, () => next(e)))
-    .catch(($, e, next) => guardShellFailed($, options, e.command, { message: next.error.message, called: next.called }, () => next(e)))
+  on('tool.call', { tool: 'Bash' }, ($, e, next) => guardCommand($, options, e.command, () => next(e)))
+    .catch(($, e, next) => guardCommandFailed($, options, e.command, { message: next.error.message, called: next.called }, () => next(e)))
   // @ts-ignore
-  on('tool.call', { tool: 'PowerShell' }, ($, e, next) => guardShell($, options, e.command, () => next(e)))
-    .catch(($, e, next) => guardShellFailed($, options, e.command, { message: next.error.message, called: next.called }, () => next(e)))
+  on('tool.call', { tool: 'PowerShell' }, ($, e, next) => guardCommand($, options, e.command, () => next(e)))
+    .catch(($, e, next) => guardCommandFailed($, options, e.command, { message: next.error.message, called: next.called }, () => next(e)))
 
   // The compositor: the one hook that draws in the band above the prompt.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

@@ -83,7 +83,7 @@ export const RULES: readonly Rule[] = [
 // ---- Classifier -------------------------------------------------------------------
 
 // Where one command ends and the next begins. `$(` and a backtick start a nested command.
-const SEPARATORS = /&&|\|\||[;|\n\r`]|\$\(|(?<![0-9>&])&(?![&>])/
+export const SEPARATORS = /&&|\|\||[;|\n\r`]|\$\(|(?<![0-9>&])&(?![&>])/
 
 // What may stand before the real command word: grouping, `!`, VAR=value, sudo, env,
 // xargs, time, a backslash that skips an alias, and the shell wrappers `sh -c '...'`,
@@ -149,7 +149,7 @@ export const NO_PREVIEW = 'no preview available'
 export const GIT_READ = ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false'] as const
 
 const unquote = (token: string) => token.replace(/^["']|["')]+$/g, '')
-const words = (segment: string) => (segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(unquote)
+export const words = (segment: string) => (segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(unquote)
 
 // `git <sub> <args...>`. Undefined when global options stand before the subcommand:
 // the previews do not follow `-C` or `--git-dir`.
@@ -161,7 +161,7 @@ export const gitArgs = (segment: string, sub: string): string[] | undefined => {
 // True when global options (`-C dir`, `-c k=v`) stand between `git` and the subcommand.
 export const hasGitOptions = (segment: string) => !/^git(?:\.exe)?\s+[a-z]/.test(segment)
 
-const SAFE_NAME = /^[\w.\/-]+$/
+export const SAFE_NAME = /^[\w.\/-]+$/
 
 // `git clean -fd` -> ['clean', '-n', '-d']: the same flags, and `-n` for a dry run.
 export const cleanDryRun = (segment: string): string[] | undefined => {

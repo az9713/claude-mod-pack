@@ -1,6 +1,6 @@
 # claude-mod-pack
 
-A mod for Claude Code is a small plugin that draws something inside the terminal UI or reacts to what Claude Code does: a row above the prompt, a pane beside the transcript, a dialog, a toast, a slash command. Mods are written as "function hooks", an early-access plugin API that can change between Claude Code releases. This repository holds `mod-pack`, one plugin with six mods. Each mod has its own on/off switch, set in the plugin settings or with the `/mods` command. The mods that draw above the prompt share that band through one compositor, so they do not overwrite each other or other plugins.
+A mod for Claude Code is a small plugin that draws something inside the terminal UI or reacts to what Claude Code does: a row above the prompt, a pane beside the transcript, a dialog, a toast, a slash command. Mods are written as "function hooks", an early-access plugin API that can change between Claude Code releases. This repository holds `mod-pack`, one plugin with seven mods. Each mod has its own on/off switch, set in the plugin settings or with the `/mods` command. The mods that draw above the prompt share that band through one compositor, so they do not overwrite each other or other plugins.
 
 `mod-pack` version 0.1.0 requires Claude Code 2.1.287 or later. The screenshots below were taken with Claude Code 2.1.288 on a Windows terminal.
 
@@ -24,7 +24,7 @@ The band after startup and one short prompt: the Token Weather row and the Cache
 
 Personal details in the screenshots (a user name, an account name, a session id) are covered with solid boxes.
 
-## The six mods
+## The seven mods
 
 | Mod | What it does | Default | Spends model tokens | Where it draws |
 | --- | --- | --- | --- | --- |
@@ -33,9 +33,10 @@ Personal details in the screenshots (a user name, an account name, a session id)
 | Prompt Queue | `/q <text>` while Claude works stacks follow-up prompts. They are sent one at a time, each when the turn before it ends. | on | no tokens of its own; each queued prompt becomes a normal turn on your plan | one row above the prompt, when the queue is not empty |
 | Wait What | After an answer of 200 characters or more, a retell in plain words, at most 2 short lines. | off | yes: each retold answer sends up to 4000 characters to the cheapest model (the `haiku` alias) and reads one short reply back, at most 30 calls an hour by default | up to 2 lines above the prompt |
 | Blast Radius | Before Claude runs a risky shell command (`rm -rf`, `git reset --hard`, `git push --force` and similar), it holds the command and asks Proceed or Cancel, with a read-only preview of what would change. | on | no | a question dialog; no band row |
+| Ship Gate | Two checks on shell commands. Before `git push`, `gh repo create`, a GitHub Pages change or `gh repo edit --visibility public`, it asks Proceed or Cancel and shows the remote, the visibility, the author e-mails of the unpushed commits and the lines of the tree that hold a personal string (your user name in the path, a non-noreply git e-mail, your own list). It denies `git commit` of code files when no test, type check or validator has passed on the current tree. | on | no | a question dialog and a denial; no band row |
 | Snake | `/snake` opens a Snake game in a pane. It pauses when Claude finishes and goes on when you send the next prompt. Keys `w` `a` `s` `d` `p` `r`. Terminal only. | on | no | a pane of its own |
 
-A seventh switch, `sound`, is off by default. It lets mods that can play a sound do so. Token Weather has a thunder sound. Claude Code plays plugin sound only where it has a player, which in the 2.1.287 type declarations is `afplay` on macOS.
+An eighth switch, `sound`, is off by default. It lets mods that can play a sound do so. Token Weather has a thunder sound. Claude Code plays plugin sound only where it has a player, which in the 2.1.287 type declarations is `afplay` on macOS.
 
 ## Install
 

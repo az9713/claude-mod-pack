@@ -2,9 +2,16 @@
   "name": "mod-pack",
   "version": "0.1.0",
   "description": "A pack of small Claude Code mods that share the band above the prompt without overwriting each other. Turn each one on or off with /mods.",
-  "author": { "name": "az9713" },
+  "author": {
+    "name": "az9713"
+  },
   "license": "MIT",
-  "keywords": ["mods", "function-hooks", "ui", "context-window"],
+  "keywords": [
+    "mods",
+    "function-hooks",
+    "ui",
+    "context-window"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "tokenWeather": {
@@ -55,6 +62,20 @@
       "description": "Ask Proceed or Cancel, with a preview of what would change, before Claude runs a risky shell command (rm -rf, git reset --hard, git push --force, ...). A non-interactive run denies those commands. Costs no model tokens.",
       "required": false,
       "default": true
+    },
+    "shipGate": {
+      "type": "boolean",
+      "title": "Ship Gate",
+      "description": "Ask Proceed or Cancel, with a check for personal strings (your user name in the folder path, a non-noreply git e-mail, your own list), before git push, gh repo create, GitHub Pages changes and gh repo edit --visibility public. Deny git commit of code files when no test, type check or validator has passed on the current tree. Costs no model tokens.",
+      "required": false,
+      "default": true
+    },
+    "shipGateTerms": {
+      "type": "string",
+      "title": "Ship Gate: personal strings",
+      "description": "Extra strings that Ship Gate searches for in the text files of the tree before a push, separated by commas. Your user name in the folder path and a git e-mail that is not a noreply address are searched without this setting.",
+      "required": false,
+      "default": ""
     },
     "snake": {
       "type": "boolean",
